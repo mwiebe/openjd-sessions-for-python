@@ -117,10 +117,10 @@ def _locate_for_other_user(
                 # Command injection here is possible, but it's irrelevant. The command is running
                 # as the given user. No need for an attacker to be fancy here, they could just run
                 # the desired attack command directly in the job template.
-                "import shutil, sys\n"
+                "import shutil, sys, pathlib\n"
                 + f"cmd = shutil.which({str(command)!r}, path={path_var!r})\n"
                 + "if cmd:\n"
-                + "  print(cmd)\n"
+                + "  print(str(pathlib.Path(cmd).absolute()))\n"
                 + f"  sys.exit({exit_code_success})\n"
                 + f"sys.exit({exit_code_could_not_find_exe})\n",
             ],
