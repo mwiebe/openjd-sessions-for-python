@@ -73,7 +73,7 @@ def _locate_for_other_user(
     os_env_vars: Optional[dict[str, Optional[str]]],
     working_dir: str,
     user: SessionUser,
-) -> str:
+) -> str:  # pragma: nocover
     # Running as a potentially different user, so it's possible that
     # this process doesn't have read access to the executable file's location.
     # Thus, we need to rely on running a subprocess as the user to be able
