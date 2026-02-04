@@ -11,7 +11,9 @@ from shutil import chown
 from tempfile import mkstemp
 from typing import Any, Generator, Optional, cast
 
-from openjd.model import SymbolTable, FormatStringError
+from openjd.model import FormatStringError
+from openjd.expr import ExprValue, ExprType, PathFormat, SymbolTable
+from openjd.expr import FunctionLibrary
 from openjd.model.v2023_09 import EmbeddedFileText as EmbeddedFileText_2023_09
 from openjd.model.v2023_09 import (
     ValueReferenceConstants as ValueReferenceConstants_2023_09,
@@ -142,8 +144,21 @@ class _FileRecord:
 # will be changing to "EmbeddedFiles" to eliminate potential confusion with job bundle's
 # "attachments"
 class EmbeddedFiles:
-    """Functionality for materializing a Script's Embedded Files to disk, and
-    adding their values to a SymbolTable for use in the Script's Actions.
+    """Materializes a Script's Embedded Files to disk and registers their
+    paths in a SymbolTable for use in the Script's Actions.
+
+    The two-step interface (allocate_file_paths then write_file_contents)
+    allows callers to inject symbols between path allocation and content
+    writing. This is needed when environment script let bindings reference
+    Env.File.* paths, since the file content may in turn reference those
+    let-bound values::
+
+        file_writer = EmbeddedFiles(logger=logger, scope=scope, ...)
+        file_writer.allocate_file_paths(files, symtab)
+        # symtab now contains Env.File.* paths — evaluate let bindings
+        symtab = evaluate_let_bindings(bindings, symtab, library)
+        # write file contents, which can reference let-bound values
+        file_writer.write_file_contents(symtab, library)
     """
 
     def __init__(
@@ -169,40 +184,48 @@ class EmbeddedFiles:
         self._target_directory = session_files_directory
         self._user = user
 
-    def materialize(self, files: EmbeddedFilesListType, symtab: SymbolTable) -> None:
+    def allocate_file_paths(self, files: EmbeddedFilesListType, symtab: SymbolTable) -> None:
+        """Allocate file paths on disk and register their symbols in the symbol table.
+
+        Must be called before write_file_contents(). After this call, the symtab
+        contains path-typed entries for each embedded file (e.g. Env.File.config).
+        """
         if self._scope == EmbeddedFilesScope.ENV:
             self._logger.info("Writing embedded files for Environment to disk.")
         else:
             self._logger.info("Writing embedded files for Task to disk.")
-
         try:
-            records = list[_FileRecord]()
-            # Generate the symbol table values and filenames
+            self._records = list[_FileRecord]()
+            path_format = PathFormat.WINDOWS if os.name == "nt" else PathFormat.POSIX
             for file in files:
-                # Raises: OSError
                 symbol, filename = self._get_symtab_entry(file)
-                records.append(_FileRecord(symbol=symbol, filename=filename, file=file))
+                self._records.append(_FileRecord(symbol=symbol, filename=filename, file=file))
 
-            # Add symbols to the symbol table
-            for record in records:
-                symtab[record.symbol] = str(record.filename)
+            for record in self._records:
+                symtab[record.symbol] = ExprValue(
+                    str(record.filename), type=ExprType.PATH, path_format=path_format
+                )
                 self._logger.info(
                     f"Mapping: {record.symbol} -> {record.filename}",
                     extra=LogExtraInfo(
                         openjd_log_content=LogContent.FILE_PATH | LogContent.PARAMETER_INFO
                     ),
                 )
+        except OSError as err:
+            raise RuntimeError(f"Could not allocate embedded file path: {err}")
 
-            # Write the files to disk.
-            for record in records:
-                # Raises: OSError
-                self._materialize_file(record.filename, record.file, symtab)
+    def write_file_contents(self, symtab: SymbolTable, library: FunctionLibrary) -> None:
+        """Write the data content of each embedded file to its allocated path.
+
+        Must be called after allocate_file_paths(). The symtab is used to resolve
+        any format strings within the file data.
+        """
+        try:
+            for record in self._records:
+                self._materialize_file(record.filename, record.file, symtab, library)
         except OSError as err:
             raise RuntimeError(f"Could not write embedded file: {err}")
         except FormatStringError as err:
-            # This should *never* happen. All format string contents are
-            # checked when building the Job Template model. If we get here,
-            # then something is broken with our model validation.
             raise RuntimeError(f"Error resolving format string: {str(err)}")
 
     def _find_value_prefix(self, file: EmbeddedFileType) -> str:
@@ -250,7 +273,7 @@ class EmbeddedFiles:
         return (f"{self._find_value_prefix(file)}.{file.name}", filename)
 
     def _materialize_file(
-        self, filename: Path, file: EmbeddedFileType, symtab: SymbolTable
+        self, filename: Path, file: EmbeddedFileType, symtab: SymbolTable, library: FunctionLibrary
     ) -> None:
         """Materialize/write the file data to disk.
         If self._user is set, then make it r/w by the given group.
@@ -264,7 +287,7 @@ class EmbeddedFiles:
             # Allow the owner to execute the file and the group if self._user is set
             execute_permissions |= stat.S_IXUSR | (stat.S_IXGRP if self._user is not None else 0)
 
-        data = file.data.resolve(symtab=symtab)
+        data = file.data.resolve(symtab=symtab, library=library).to_string()
         # Get endOfLine setting if present
         end_of_line = file.endOfLine.value if file.endOfLine else None
         # Create the file as r/w owner, and optionally group

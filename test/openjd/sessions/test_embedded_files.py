@@ -11,7 +11,8 @@ import pytest
 
 from utils.windows_acl_helper import MODIFY_READ_WRITE_MASK, principal_has_access_to_object
 
-from openjd.model import SymbolTable
+from openjd.expr import get_default_library
+from openjd.expr import ExprValue, SymbolTable
 from openjd.model.v2023_09 import DataString as DataString_2023_09
 from openjd.model.v2023_09 import (
     EmbeddedFileText as EmbeddedFileText_2023_09,
@@ -144,7 +145,7 @@ class TestEmbeddedFiles:
             symtab = SymbolTable()
 
             # WHEN
-            test_obj._materialize_file(filename, test_file, symtab)
+            test_obj._materialize_file(filename, test_file, symtab, get_default_library())
 
             # THEN
             assert os.path.exists(filename)
@@ -178,7 +179,7 @@ class TestEmbeddedFiles:
                 file.write("This needs to be longer than our test data to test truncation")
 
             # WHEN
-            test_obj._materialize_file(filename, test_file, symtab)
+            test_obj._materialize_file(filename, test_file, symtab, get_default_library())
 
             # THEN
             with open(filename, "r") as file:
@@ -203,7 +204,7 @@ class TestEmbeddedFiles:
             symtab = SymbolTable()
 
             # WHEN
-            test_obj._materialize_file(filename, test_file, symtab)
+            test_obj._materialize_file(filename, test_file, symtab, get_default_library())
 
             # THEN
             assert os.path.exists(filename)
@@ -234,10 +235,10 @@ class TestEmbeddedFiles:
             )
             filename = tmp_path / uuid.uuid4().hex
             testdataresult = "some data"
-            symtab = SymbolTable(source={"Var.Value": testdataresult})
+            symtab = SymbolTable({"Var.Value": testdataresult})
 
             # WHEN
-            test_obj._materialize_file(filename, test_file, symtab)
+            test_obj._materialize_file(filename, test_file, symtab, get_default_library())
 
             # THEN
             assert os.path.exists(filename)
@@ -273,7 +274,7 @@ class TestEmbeddedFiles:
             gid = grp.getgrnam(posix_target_user.group).gr_gid  # type: ignore
 
             # WHEN
-            test_obj._materialize_file(filename, test_file, symtab)
+            test_obj._materialize_file(filename, test_file, symtab, get_default_library())
 
             # THEN
             assert os.path.exists(filename)
@@ -318,7 +319,7 @@ class TestEmbeddedFiles:
             gid = grp.getgrnam(posix_target_user.group).gr_gid  # type: ignore
 
             # WHEN
-            test_obj._materialize_file(filename, test_file, symtab)
+            test_obj._materialize_file(filename, test_file, symtab, get_default_library())
 
             # THEN
             assert os.path.exists(filename)
@@ -357,7 +358,7 @@ class TestEmbeddedFiles:
             symtab = SymbolTable()
 
             # WHEN
-            test_obj._materialize_file(filename, test_file, symtab)
+            test_obj._materialize_file(filename, test_file, symtab, get_default_library())
 
             # THEN
             assert os.path.exists(filename)
@@ -423,7 +424,7 @@ class TestEmbeddedFiles:
             symtab = SymbolTable()
 
             # WHEN
-            test_obj._materialize_file(filename, test_file, symtab)
+            test_obj._materialize_file(filename, test_file, symtab, get_default_library())
 
             # THEN
             with open(filename, "rb") as file:
@@ -448,7 +449,7 @@ class TestEmbeddedFiles:
             symtab = SymbolTable()
 
             # WHEN
-            test_obj._materialize_file(filename, test_file, symtab)
+            test_obj._materialize_file(filename, test_file, symtab, get_default_library())
 
             # THEN
             with open(filename, "rb") as file:
@@ -474,7 +475,7 @@ class TestEmbeddedFiles:
 
             # WHEN
             with patch("os.name", "nt"):
-                test_obj._materialize_file(filename, test_file, symtab)
+                test_obj._materialize_file(filename, test_file, symtab, get_default_library())
 
             # THEN
             with open(filename, "rb") as file:
@@ -482,7 +483,7 @@ class TestEmbeddedFiles:
             assert result_bytes == b"line1\r\nline2"
 
     class TestMaterialize:
-        """Tests for EmbeddedFiles.materialize()"""
+        """Tests for EmbeddedFiles.allocate_file_paths / write_file_contents()"""
 
         def test_basic(self, tmp_path: Path) -> None:
             # Basic test - we can write several files and they show up in the filesystem
@@ -529,12 +530,15 @@ class TestEmbeddedFiles:
             )
 
             # WHEN
-            test_obj.materialize(given_files, symtab)
+            test_obj.allocate_file_paths(given_files, symtab)
+            test_obj.write_file_contents(symtab, get_default_library())
 
             # THEN
             for data in test_data:
                 assert data.symbol in symtab, f"Symbol for {data.name} is in the symtab"
-                filename = symtab[data.symbol]
+                file_val = symtab[data.symbol]
+                assert isinstance(file_val, ExprValue)
+                filename = file_val.to_string()
                 assert os.path.exists(filename), f"File exists for {data.name}"
                 with open(filename, "r") as file:
                     result_contents = file.read()
@@ -612,12 +616,15 @@ class TestEmbeddedFiles:
             gid = grp.getgrnam(posix_target_user.group).gr_gid  # type: ignore
 
             # WHEN
-            test_obj.materialize(given_files, symtab)
+            test_obj.allocate_file_paths(given_files, symtab)
+            test_obj.write_file_contents(symtab, get_default_library())
 
             # THEN
             for data in test_data:
                 assert data.symbol in symtab, f"Symbol for {data.name} is in the symtab"
-                filename = symtab[data.symbol]
+                file_val = symtab[data.symbol]
+                assert isinstance(file_val, ExprValue)
+                filename = file_val.to_string()
                 assert os.path.exists(filename), f"File exists for {data.name}"
                 with open(filename, "r") as file:
                     result_contents = file.read()
@@ -693,12 +700,15 @@ class TestEmbeddedFiles:
             )
 
             # WHEN
-            test_obj.materialize(given_files, symtab)
+            test_obj.allocate_file_paths(given_files, symtab)
+            test_obj.write_file_contents(symtab, get_default_library())
 
             # THEN
             for data in test_data:
                 assert data.symbol in symtab, f"Symbol for {data.name} is in the symtab"
-                filename = symtab[data.symbol]
+                file_val = symtab[data.symbol]
+                assert isinstance(file_val, ExprValue)
+                filename = file_val.to_string()
                 assert os.path.exists(filename), f"File exists for {data.name}"
                 with open(filename, "r") as file:
                     result_contents = file.read()
@@ -719,7 +729,7 @@ class TestEmbeddedFiles:
                 symbol: str
                 filename: str
 
-            symtab = SymbolTable(source={"Given.Symbol": "Symbol"})  # empty
+            symtab = SymbolTable({"Given.Symbol": "Symbol"})  # empty
             test_data: list[Datum] = [
                 Datum(
                     symbol="Env.File.Foo",
@@ -767,12 +777,15 @@ class TestEmbeddedFiles:
             )
 
             # WHEN
-            test_obj.materialize(given_files, symtab)
+            test_obj.allocate_file_paths(given_files, symtab)
+            test_obj.write_file_contents(symtab, get_default_library())
 
             # THEN
             for data in test_data:
                 assert data.symbol in symtab, f"Symbol for {data.name} is in the symtab"
-                filename = symtab[data.symbol]
+                file_val = symtab[data.symbol]
+                assert isinstance(file_val, ExprValue)
+                filename = file_val.to_string()
                 assert os.path.exists(filename), f"File exists for {data.name}"
                 with open(filename, "r") as file:
                     result_contents = file.read()

@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from openjd.sessions import PathFormat, PathMappingRule
-from openjd.sessions import _path_mapping as path_mapping_impl_mod
+from openjd.expr import _path_mapping as path_mapping_impl_mod
 
 
 class OSName(str, Enum):

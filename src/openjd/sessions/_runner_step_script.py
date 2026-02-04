@@ -5,14 +5,15 @@ from ._logging import LoggerAdapter
 from pathlib import Path
 from typing import Callable, Optional
 
-from openjd.model import SymbolTable
+from openjd.expr import SymbolTable
+from openjd.expr import FunctionLibrary
 from openjd.model.v2023_09 import CancelationMode as CancelationMode_2023_09
 from openjd.model.v2023_09 import StepScript as StepScript_2023_09
 from openjd.model.v2023_09 import (
     CancelationMethodNotifyThenTerminate as CancelationMethodNotifyThenTerminate_2023_09,
 )
 from ._embedded_files import EmbeddedFilesScope
-from ._logging import log_subsection_banner
+from ._logging import log_subsection_banner, LogExtraInfo, LogContent
 from ._runner_base import (
     CancelMethod,
     NotifyCancelMethod,
@@ -20,6 +21,7 @@ from ._runner_base import (
     ScriptRunnerState,
     TerminateCancelMethod,
 )
+from openjd.model import evaluate_let_bindings
 from ._session_user import SessionUser
 from ._types import ActionState, StepScriptModel
 
@@ -37,6 +39,10 @@ class StepScriptRunner(ScriptRunnerBase):
     """Treat this as immutable.
     A SymbolTable containing values for all defined variables in the Step
     Script's scope (exluding any symbols defined within the Step Script itself).
+    """
+
+    _library: FunctionLibrary
+    """Function library for expression evaluation.
     """
 
     _session_files_directory: Path
@@ -58,6 +64,7 @@ class StepScriptRunner(ScriptRunnerBase):
         callback: Optional[Callable[[ActionState], None]] = None,
         script: StepScriptModel,
         symtab: SymbolTable,
+        library: FunctionLibrary,
         # Directory within which files/attachments should be materialized
         session_files_directory: Path,
     ):
@@ -90,6 +97,7 @@ class StepScriptRunner(ScriptRunnerBase):
         )
         self._script = script
         self._symtab = symtab
+        self._library = library
         self._session_files_directory = session_files_directory
 
         if not isinstance(self._script, StepScript_2023_09):
@@ -104,22 +112,37 @@ class StepScriptRunner(ScriptRunnerBase):
 
         # For the type checker.
         assert isinstance(self._script, StepScript_2023_09)
+
+        # Evaluate let bindings if present (returns new symtab, doesn't mutate)
+        if self._script.let:
+            try:
+                symtab = evaluate_let_bindings(self._script.let, self._symtab, self._library)
+            except Exception as exc:
+                self._logger.info(
+                    f"openjd_fail: {exc}",
+                    extra=LogExtraInfo(openjd_log_content=LogContent.EXCEPTION_INFO),
+                )
+                self._state_override = ScriptRunnerState.FAILED
+                if self._callback is not None:
+                    self._callback(ActionState.FAILED)
+                return
+        else:
+            symtab = SymbolTable(source=self._symtab)
+
         # Write any embedded files to disk
         if self._script.embeddedFiles is not None:
-            symtab = SymbolTable(source=self._symtab)
             self._materialize_files(
                 EmbeddedFilesScope.STEP,
                 self._script.embeddedFiles,
                 self._session_files_directory,
                 symtab,
+                self._library,
             )
             if self.state == ScriptRunnerState.FAILED:
                 return
-        else:
-            symtab = self._symtab
 
         # Construct the command by evalutating the format strings in the command
-        self._run_action(self._script.actions.onRun, symtab)
+        self._run_action(self._script.actions.onRun, symtab, self._library)
 
     def cancel(
         self, *, time_limit: Optional[timedelta] = None, mark_action_failed: bool = False
