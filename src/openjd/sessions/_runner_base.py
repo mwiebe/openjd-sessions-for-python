@@ -15,9 +15,11 @@ from typing import Callable, Optional, Sequence, Type, cast
 from types import TracebackType
 from tempfile import mkstemp
 
-from openjd.model import SymbolTable
+from openjd.expr import SymbolTable
 from openjd.model import FormatStringError
 from openjd.model.v2023_09 import Action as Action_2023_09
+from openjd.expr import FunctionLibrary
+from openjd.expr._types import TypeCode
 from ._embedded_files import EmbeddedFiles, EmbeddedFilesScope, write_file_for_user
 from ._logging import log_subsection_banner, LoggerAdapter, LogContent, LogExtraInfo
 from ._os_checker import is_posix
@@ -25,6 +27,7 @@ from ._session_user import SessionUser
 from ._subprocess import LoggingSubprocess
 from ._types import ActionModel, ActionState, EmbeddedFilesListType
 from ._win32._locate_executable import locate_windows_executable
+
 
 __all__ = (
     "ScriptRunnerState",
@@ -398,6 +401,7 @@ class ScriptRunnerBase(ABC):
         files: EmbeddedFilesListType,
         dest_directory: Path,
         symtab: SymbolTable,
+        library: "FunctionLibrary",
     ) -> None:
         """Helper for derived classes that wraps all of the logic around
         materializing embedded files to disk.
@@ -410,7 +414,8 @@ class ScriptRunnerBase(ABC):
             user=self._user,
         )
         try:
-            file_writer.materialize(files, symtab)
+            file_writer.allocate_file_paths(files, symtab)
+            file_writer.write_file_contents(symtab, library)
         except RuntimeError as exc:
             # Had a problem writing at least one file to disk.
             # Surface the error.
@@ -430,6 +435,7 @@ class ScriptRunnerBase(ABC):
         self,
         action: ActionModel,
         symtab: SymbolTable,
+        library: "FunctionLibrary",
         *,
         default_timeout: Optional[timedelta] = None,
     ) -> None:
@@ -440,15 +446,24 @@ class ScriptRunnerBase(ABC):
                 instance of Action_2023_09.
             symtab (SymbolTable): Symbol table used for resolving command and
                 arguments.
+            library (FunctionLibrary): Function library for expression evaluation.
             default_timeout (Optional[timedelta], optional): Default timeout duration
                 for the action if no timeout is specified in the action. The default behaviour if
                 None is passed will allow the action to run indefinitely until it completes.
         """
         assert isinstance(action, Action_2023_09)
         try:
-            command = [action.command.resolve(symtab=symtab)]
+            command = [action.command.resolve(symtab=symtab, library=library).to_string()]
             if action.args is not None:
-                command.extend(s.resolve(symtab=symtab) for s in action.args)
+                for arg in action.args:
+                    result = arg.resolve(symtab=symtab, library=library)
+                    if result.is_null:
+                        continue  # Skip null values
+                    elif result.type.type_code == TypeCode.LIST:
+                        # Flatten list into command args
+                        command.extend(v.to_string() for v in result.to_expr_value_list())
+                    else:
+                        command.append(result.to_string())
         except FormatStringError as exc:
             # Extremely unlikely since a JobTemplate needs to have passed
             # validation before we could be running it, but just to be safe.

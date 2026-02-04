@@ -11,7 +11,7 @@ from enum import Enum
 from logging import Filter
 from os import name as os_name
 from os import stat as os_stat
-from pathlib import Path
+from pathlib import Path, PurePath
 from tempfile import mkstemp
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Callable, Optional, Type, Union
@@ -22,7 +22,6 @@ from openjd.model import (
     ParameterValueType,
     RevisionExtensions,
     SpecificationRevision,
-    SymbolTable,
     TaskParameterSet,
 )
 from openjd.model import version as model_version
@@ -35,6 +34,15 @@ from openjd.model.v2023_09 import (
     StepActions as StepActions_2023_09,
     StepScript as StepScript_2023_09,
     ValueReferenceConstants as ValueReferenceConstants_2023_09,
+)
+from openjd.expr import (
+    ExprType,
+    ExprValue,
+    SymbolTable,
+    FunctionLibrary,
+    PathMappingRule as ExprPathMappingRule,
+    PathFormat,
+    get_default_library,
 )
 from ._action_filter import ActionMessageKind, ActionMonitoringFilter
 from ._embedded_files import write_file_for_user
@@ -60,6 +68,30 @@ if is_windows():  # pragma: nocover
 
 if TYPE_CHECKING:
     from openjd.model.v2023_09._model import EnvironmentVariableObject
+
+# Map ParameterValueType to ExprType
+_PARAM_TYPE_TO_EXPR_TYPE: dict[ParameterValueType, ExprType] = {
+    ParameterValueType.STRING: ExprType.STRING,
+    ParameterValueType.INT: ExprType.INT,
+    ParameterValueType.FLOAT: ExprType.FLOAT,
+    ParameterValueType.PATH: ExprType.PATH,
+    ParameterValueType.BOOL: ExprType.BOOL,
+    ParameterValueType.RANGE_EXPR: ExprType.RANGE_EXPR,
+    ParameterValueType.LIST_STRING: ExprType.LIST_STRING,
+    ParameterValueType.LIST_INT: ExprType.LIST_INT,
+    ParameterValueType.LIST_FLOAT: ExprType.LIST_FLOAT,
+    ParameterValueType.LIST_PATH: ExprType.LIST_PATH,
+    ParameterValueType.LIST_BOOL: ExprType.LIST_BOOL,
+    ParameterValueType.LIST_LIST_INT: ExprType.LIST_LIST_INT,
+    # CHUNK[INT] task parameters produce range_expr values at runtime
+    ParameterValueType.CHUNK_INT: ExprType.RANGE_EXPR,
+}
+
+
+def _param_type_to_expr_type(param_type: ParameterValueType) -> ExprType:
+    """Convert ParameterValueType to ExprType."""
+    return _PARAM_TYPE_TO_EXPR_TYPE.get(param_type, ExprType.STRING)
+
 
 __all__ = ("SessionState", "Session", "EnvironmentIdentifier")
 
@@ -396,7 +428,13 @@ class Session(object):
         if self._path_mapping_rules is not None:
             # Path mapping rules are applied in order of longest to shortest source path,
             # so sort them for when we apply them.
-            self._path_mapping_rules.sort(key=lambda rule: -len(rule.source_path.parts))
+            self._path_mapping_rules.sort(
+                key=lambda rule: (
+                    -len(rule.source_path.parts)
+                    if isinstance(rule.source_path, PurePath)
+                    else -len(rule.source_path)
+                )
+            )
         self._session_root_directory = session_root_directory
         if self._session_root_directory is not None:
             if not self._session_root_directory.is_dir():
@@ -609,6 +647,7 @@ class Session(object):
         environment: EnvironmentModel,
         identifier: Optional[EnvironmentIdentifier] = None,
         os_env_vars: Optional[dict[str, str]] = None,
+        resolved_bindings: Optional[list[dict[str, Any]]] = None,
     ) -> EnvironmentIdentifier:
         """Enters an Open Job Description Environment within this Session.
         This method is non-blocking; it will exit when the subprocess is either confirmed to have
@@ -627,6 +666,9 @@ class Session(object):
                 by values defined in Environments.
                     Key: Environment variable name
                     Value: Value for the environment variable.
+            resolved_bindings (Optional[list[dict[str, Any]]]): Resolved variable bindings
+                from job creation time (let bindings, Job.Name, Step.Name, etc.).
+                Each dict has "name", "value", and "type" keys.
 
         Returns:
             EnvironmentIdentifier: An identifier by which the Environment is known by to this Session.
@@ -649,7 +691,9 @@ class Session(object):
         self._environments_entered.append(identifier)
         self._running_environment_identifier = identifier
 
-        symtab = self._symbol_table(environment.revision)
+        symtab, library = self._symbol_table(
+            environment.revision, resolved_bindings=resolved_bindings
+        )
 
         if environment.variables is not None:
             # We must process the current environment's variables
@@ -658,7 +702,7 @@ class Session(object):
             # the environment variables of the current environment
             # being set.
             resolved_variables = self._resolve_env_variable_format_strings(
-                symtab, environment.variables
+                symtab, environment.variables, library
             )
             for name, value in resolved_variables.items():
                 self._logger.info(
@@ -699,6 +743,7 @@ class Session(object):
             callback=self._action_callback,
             environment_script=environment.script,
             symtab=symtab,
+            library=library,
             session_files_directory=self.files_directory,
         )
         self._runner.enter()
@@ -711,6 +756,7 @@ class Session(object):
         identifier: EnvironmentIdentifier,
         os_env_vars: Optional[dict[str, str]] = None,
         keep_session_running: bool = False,
+        resolved_bindings: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         """Exits an Open Job Description Environment from this Session.
         This method is non-blocking; it will exit when the subprocess is either confirmed to have
@@ -731,6 +777,9 @@ class Session(object):
             keep_session_running (bool): This overrides the default of requiring only environment exits after
                 the first exit_environment is called. The caller can set this to True in order to exit
                 the environments of a step and then run tasks from a different step.
+            resolved_bindings (Optional[list[dict[str, Any]]]): Resolved variable bindings
+                from job creation time (let bindings, Job.Name, Step.Name, etc.).
+                Each dict has "name", "value", and "type" keys.
 
         Raises:
             ValueError - If the given identifier is not that of the next one that must be exited.
@@ -764,7 +813,9 @@ class Session(object):
 
         self._running_environment_identifier = identifier
 
-        symtab = self._symbol_table(environment.revision)
+        symtab, library = self._symbol_table(
+            environment.revision, resolved_bindings=resolved_bindings
+        )
         self._materialize_path_mapping(environment.revision, action_env_vars, symtab)
         # Sets the subprocess running.
         # Returns immediately after it has started, or is running
@@ -783,6 +834,7 @@ class Session(object):
             callback=self._action_callback,
             environment_script=environment.script,
             symtab=symtab,
+            library=library,
             session_files_directory=self.files_directory,
         )
         self._runner.exit()
@@ -794,6 +846,7 @@ class Session(object):
         task_parameter_values: TaskParameterSet,
         os_env_vars: Optional[dict[str, str]] = None,
         log_task_banner: bool = True,
+        resolved_bindings: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         """Run a Task within the Session.
         This method is non-blocking; it will exit when the subprocess is either confirmed to have
@@ -812,6 +865,9 @@ class Session(object):
                     Value: Value for the environment variable.
             log_task_banner (bool): Whether to log a banner before running the Task.
                 Default: True
+            resolved_bindings (Optional[list[dict[str, Any]]]): Resolved variable bindings
+                from job creation time (let bindings, Job.Name, Step.Name, etc.).
+                Each dict has "name", "value", and "type" keys.
         """
         if self.state != SessionState.READY:
             raise RuntimeError("Session must be in the READY state to run a task.")
@@ -831,7 +887,9 @@ class Session(object):
                 )
 
         self._reset_action_state()
-        symtab = self._symbol_table(step_script.revision, task_parameter_values)
+        symtab, library = self._symbol_table(
+            step_script.revision, task_parameter_values, resolved_bindings
+        )
         action_env_vars = self._evaluate_current_session_env_vars(os_env_vars)
         self._materialize_path_mapping(step_script.revision, action_env_vars, symtab)
         self._runner = StepScriptRunner(
@@ -843,6 +901,7 @@ class Session(object):
             callback=self._action_callback,
             script=step_script,
             symtab=symtab,
+            library=library,
             session_files_directory=self.files_directory,
         )
         # Sets the subprocess running.
@@ -883,7 +942,7 @@ class Session(object):
                 )
 
         self._reset_action_state()
-        symtab = self._symbol_table(step_script.revision, task_parameter_values)
+        symtab, library = self._symbol_table(step_script.revision, task_parameter_values)
 
         # Evaluate environment variables
         action_env_vars = dict[str, Optional[str]](self._process_env)  # Make a copy
@@ -900,6 +959,7 @@ class Session(object):
             callback=self._action_callback,
             script=step_script,
             symtab=symtab,
+            library=library,
             session_files_directory=self.files_directory,
         )
         # Sets the subprocess running.
@@ -992,6 +1052,7 @@ class Session(object):
 
         # Create empty symbol table (no format string substitution for ad-hoc subprocesses)
         symtab = SymbolTable()
+        library = get_default_library()
 
         # Evaluate environment variables
         if use_session_env_vars:
@@ -1015,6 +1076,7 @@ class Session(object):
             callback=self._action_callback,
             script=step_script,
             symtab=symtab,
+            library=library,
             session_files_directory=self.files_directory,
         )
 
@@ -1056,39 +1118,96 @@ class Session(object):
         self,
         version: SpecificationRevision,
         task_parameter_values: Optional[TaskParameterSet] = None,
-    ) -> SymbolTable:
-        """Construct a SymbolTable, with fully qualified value names, suitable for running a Script."""
+        resolved_bindings: Optional[list[dict[str, Any]]] = None,
+    ) -> tuple[SymbolTable, FunctionLibrary]:
+        """Construct a SymbolTable and FunctionLibrary suitable for running a Script."""
 
-        def processed_parameter_value(param: ParameterValue) -> str:
+        def processed_parameter_value(param: ParameterValue) -> Any:
             if param.type == ParameterValueType.PATH and self._path_mapping_rules is not None:
                 # Apply path mapping rules in the order given until one does a replacement
                 for rule in self._path_mapping_rules:
                     changed, result = rule.apply(path=param.value)
                     if changed:
                         return result
+            if param.type == ParameterValueType.LIST_PATH and self._path_mapping_rules is not None:
+                # Apply path mapping to each path in the list
+                mapped_paths: list[str] = []
+                for path_val in param.value:
+                    mapped = path_val
+                    for rule in self._path_mapping_rules:
+                        changed, mapped = rule.apply(path=path_val)
+                        if changed:
+                            break
+                    mapped_paths.append(mapped)
+                return mapped_paths
+            if param.type == ParameterValueType.RANGE_EXPR:
+                # Convert string to IntRangeExpr for expression evaluation
+                from openjd.model import IntRangeExpr
+
+                return IntRangeExpr.from_str(param.value)
             return param.value
+
+        def _raw_type_for(param_type: ParameterValueType) -> ExprType:
+            """RawParam is STRING for PATH, LIST[STRING] for LIST[PATH], converted type otherwise."""
+            if param_type == ParameterValueType.PATH:
+                return ExprType.STRING
+            if param_type == ParameterValueType.LIST_PATH:
+                return ExprType.LIST_STRING
+            return _param_type_to_expr_type(param_type)
 
         if version == SpecificationRevision.v2023_09:
             symtab = SymbolTable()
-            symtab[ValueReferenceConstants_2023_09.WORKING_DIRECTORY.value] = str(
-                self.working_directory
+
+            # Set up function library with host context for apply_path_mapping
+            expr_rules = None
+            if self._path_mapping_rules:
+                expr_rules = [
+                    ExprPathMappingRule(
+                        source_path_format=PathFormat(rule.source_path_format.value),
+                        source_path=rule.source_path,
+                        destination_path=rule.destination_path,
+                    )
+                    for rule in self._path_mapping_rules
+                ]
+            library = FunctionLibrary().with_host_context(path_mapping_rules=expr_rules)
+
+            host_path_format = PathFormat.WINDOWS if os_name == "nt" else PathFormat.POSIX
+
+            symtab[ValueReferenceConstants_2023_09.WORKING_DIRECTORY.value] = ExprValue(
+                str(self.working_directory), type=ExprType.PATH, path_format=host_path_format
             )
             for param_name, param_props in self._job_parameter_values.items():
-                symtab[
+                raw_key = (
                     f"{ValueReferenceConstants_2023_09.JOB_PARAMETER_RAWPREFIX.value}.{param_name}"
-                ] = param_props.value
-                symtab[
-                    f"{ValueReferenceConstants_2023_09.JOB_PARAMETER_PREFIX.value}.{param_name}"
-                ] = processed_parameter_value(param_props)
+                )
+                symtab[raw_key] = ExprValue(param_props.value, type=_raw_type_for(param_props.type))
+                key = f"{ValueReferenceConstants_2023_09.JOB_PARAMETER_PREFIX.value}.{param_name}"
+                symtab[key] = ExprValue(
+                    processed_parameter_value(param_props),
+                    type=_param_type_to_expr_type(param_props.type),
+                    path_format=host_path_format,
+                )
             if task_parameter_values:
                 for param_name, param_props in task_parameter_values.items():
-                    symtab[
-                        f"{ValueReferenceConstants_2023_09.TASK_PARAMETER_RAWPREFIX.value}.{param_name}"
-                    ] = param_props.value
-                    symtab[
-                        f"{ValueReferenceConstants_2023_09.TASK_PARAMETER_PREFIX.value}.{param_name}"
-                    ] = processed_parameter_value(param_props)
-            return symtab
+                    raw_key = f"{ValueReferenceConstants_2023_09.TASK_PARAMETER_RAWPREFIX.value}.{param_name}"
+                    symtab[raw_key] = ExprValue(
+                        param_props.value, type=_raw_type_for(param_props.type)
+                    )
+                    key = f"{ValueReferenceConstants_2023_09.TASK_PARAMETER_PREFIX.value}.{param_name}"
+                    symtab[key] = ExprValue(
+                        processed_parameter_value(param_props),
+                        type=_param_type_to_expr_type(param_props.type),
+                        path_format=host_path_format,
+                    )
+            # Add resolved bindings (let bindings, Job.Name, Step.Name, etc.)
+            if resolved_bindings:
+                for binding in resolved_bindings:
+                    symtab[binding["name"]] = ExprValue(
+                        binding["value"],
+                        type=ExprType(binding["type"]),
+                        path_format=host_path_format,
+                    )
+            return symtab, library
         else:
             raise NotImplementedError(f"Schema version {str(version.value)} is not supported.")
 
@@ -1169,18 +1288,26 @@ class Session(object):
                     for rule in self._path_mapping_rules
                 ],
             }
-            symtab[ValueReferenceConstants_2023_09.HAS_PATH_MAPPING_RULES.value] = "true"
+            symtab[ValueReferenceConstants_2023_09.HAS_PATH_MAPPING_RULES.value] = ExprValue(
+                True, type=ExprType.BOOL
+            )
         else:
             rules_dict = dict()
-            symtab[ValueReferenceConstants_2023_09.HAS_PATH_MAPPING_RULES.value] = "false"
+            symtab[ValueReferenceConstants_2023_09.HAS_PATH_MAPPING_RULES.value] = ExprValue(
+                False, type=ExprType.BOOL
+            )
         rules_json = json.dumps(rules_dict)
         file_handle, filename = mkstemp(dir=self.working_directory, suffix=".json", text=True)
         os.close(file_handle)
         write_file_for_user(Path(filename), rules_json, self._user)
-        symtab[ValueReferenceConstants_2023_09.PATH_MAPPING_RULES_FILE.value] = str(filename)
+        symtab[ValueReferenceConstants_2023_09.PATH_MAPPING_RULES_FILE.value] = ExprValue(
+            str(filename),
+            type=ExprType.PATH,
+            path_format=PathFormat.WINDOWS if os_name == "nt" else PathFormat.POSIX,
+        )
 
     def _resolve_env_variable_format_strings(
-        self, symtab: SymbolTable, variables: "EnvironmentVariableObject"
+        self, symtab: SymbolTable, variables: "EnvironmentVariableObject", library: FunctionLibrary
     ) -> dict[str, str]:
         """When definining an environment variable via an Environment entity's "variables" declaration,
         the values of those variables are format strings that must be evaluated. Do that, and return the
@@ -1188,7 +1315,7 @@ class Session(object):
         """
         result = dict()
         for name, value in variables.items():
-            result[name] = value.resolve(symtab=symtab)
+            result[name] = value.resolve(symtab=symtab, library=library).to_string()
 
         return result
 

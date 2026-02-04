@@ -5,15 +5,16 @@ from ._logging import LoggerAdapter
 from pathlib import Path
 from typing import Callable, Optional
 
-from openjd.model import SymbolTable
+from openjd.expr import SymbolTable
+from openjd.expr import FunctionLibrary
 from openjd.model.v2023_09 import Action as Action_2023_09
 from openjd.model.v2023_09 import CancelationMode as CancelationMode_2023_09
 from openjd.model.v2023_09 import (
     CancelationMethodNotifyThenTerminate as CancelationMethodNotifyThenTerminate_2023_09,
 )
 from openjd.model.v2023_09 import EnvironmentScript as EnvironmentScript_2023_09
-from ._embedded_files import EmbeddedFilesScope
-from ._logging import log_subsection_banner
+from ._embedded_files import EmbeddedFiles, EmbeddedFilesScope
+from ._logging import log_subsection_banner, LogExtraInfo, LogContent
 from ._runner_base import (
     CancelMethod,
     NotifyCancelMethod,
@@ -21,6 +22,7 @@ from ._runner_base import (
     ScriptRunnerState,
     TerminateCancelMethod,
 )
+from openjd.model import evaluate_let_bindings
 from ._session_user import SessionUser
 from ._types import ActionModel, ActionState, EnvironmentScriptModel
 
@@ -47,6 +49,10 @@ class EnvironmentScriptRunner(ScriptRunnerBase):
     Script's scope (exluding any symbols defined within the Step Script itself).
     """
 
+    _library: FunctionLibrary
+    """Function library for expression evaluation.
+    """
+
     _session_files_directory: Path
     """The location in the filesystem where embedded files will be materialized.
     """
@@ -70,6 +76,7 @@ class EnvironmentScriptRunner(ScriptRunnerBase):
         callback: Optional[Callable[[ActionState], None]] = None,
         environment_script: Optional[EnvironmentScriptModel] = None,
         symtab: SymbolTable,
+        library: FunctionLibrary,
         # Directory within which files/attachments should be materialized
         session_files_directory: Path,
     ):
@@ -102,6 +109,7 @@ class EnvironmentScriptRunner(ScriptRunnerBase):
         )
         self._environment_script = environment_script
         self._symtab = symtab
+        self._library = library
         self._session_files_directory = session_files_directory
         self._action = None
 
@@ -120,27 +128,95 @@ class EnvironmentScriptRunner(ScriptRunnerBase):
 
         log_subsection_banner(self._logger, "Phase: Setup")
 
-        # Write any embedded files to disk
-        if (
-            self._environment_script is not None
-            and self._environment_script.embeddedFiles is not None
+        env_script: Optional[EnvironmentScript_2023_09] = None
+        if self._environment_script is not None and isinstance(
+            self._environment_script, EnvironmentScript_2023_09
         ):
+            env_script = self._environment_script
+
+        let_bindings = env_script.let if env_script is not None else None
+        embedded_files = env_script.embeddedFiles if env_script is not None else None
+
+        # When both let bindings and embedded files are present, use two-phase
+        # file materialization so that let bindings can reference Env.File.* paths.
+        # Phase 1: allocate file paths and register Env.File.* symbols
+        # Phase 2: evaluate let bindings (which can now use Env.File.*)
+        # Phase 3: write file contents (which can use let-bound values)
+        if let_bindings and embedded_files:
             symtab = SymbolTable(source=self._symtab)
-            # Note: _materialize_files calls the callback if it fails.
-            self._materialize_files(
-                EmbeddedFilesScope.ENV,
-                self._environment_script.embeddedFiles,
-                self._session_files_directory,
-                symtab,
+            file_writer = EmbeddedFiles(
+                logger=self._logger,
+                scope=EmbeddedFilesScope.ENV,
+                session_files_directory=self._session_files_directory,
+                user=self._user,
             )
-            if self.state == ScriptRunnerState.FAILED:
+            try:
+                file_writer.allocate_file_paths(embedded_files, symtab)
+            except RuntimeError as exc:
+                self._logger.info(
+                    f"openjd_fail: {str(exc)}",
+                    extra=LogExtraInfo(openjd_log_content=LogContent.EXCEPTION_INFO),
+                )
+                self._state_override = ScriptRunnerState.FAILED
+                if self._callback is not None:
+                    self._callback(ActionState.FAILED)
+                return
+
+            try:
+                symtab = evaluate_let_bindings(let_bindings, symtab, self._library)
+            except Exception as exc:
+                self._logger.info(
+                    f"openjd_fail: {exc}",
+                    extra=LogExtraInfo(openjd_log_content=LogContent.EXCEPTION_INFO),
+                )
+                self._state_override = ScriptRunnerState.FAILED
+                if self._callback is not None:
+                    self._callback(ActionState.FAILED)
+                return
+
+            try:
+                file_writer.write_file_contents(symtab, self._library)
+            except RuntimeError as exc:
+                self._logger.info(
+                    f"openjd_fail: {str(exc)}",
+                    extra=LogExtraInfo(openjd_log_content=LogContent.EXCEPTION_INFO),
+                )
+                self._state_override = ScriptRunnerState.FAILED
+                if self._callback is not None:
+                    self._callback(ActionState.FAILED)
                 return
         else:
-            symtab = self._symtab
+            # Evaluate let bindings if present (returns new symtab, doesn't mutate)
+            if let_bindings:
+                try:
+                    symtab = evaluate_let_bindings(let_bindings, self._symtab, self._library)
+                except Exception as exc:
+                    self._logger.info(
+                        f"openjd_fail: {exc}",
+                        extra=LogExtraInfo(openjd_log_content=LogContent.EXCEPTION_INFO),
+                    )
+                    self._state_override = ScriptRunnerState.FAILED
+                    if self._callback is not None:
+                        self._callback(ActionState.FAILED)
+                    return
+            else:
+                symtab = SymbolTable(source=self._symtab)
+
+            # Write any embedded files to disk
+            if embedded_files:
+                self._materialize_files(
+                    EmbeddedFilesScope.ENV,
+                    embedded_files,
+                    self._session_files_directory,
+                    symtab,
+                    self._library,
+                )
+                if self.state == ScriptRunnerState.FAILED:
+                    return
 
         # Construct the command by evalutating the format strings in the command
         self._action = action
-        self._run_action(self._action, symtab, default_timeout=default_timeout)
+        self._run_action(self._action, symtab, self._library, default_timeout=default_timeout)
 
     def enter(self) -> None:
         """Run the Environment's onEnter action."""

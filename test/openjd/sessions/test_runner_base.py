@@ -12,7 +12,8 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-from openjd.model import SymbolTable
+from openjd.expr import get_default_library
+from openjd.expr import SymbolTable
 from openjd.model.v2023_09 import Action as Action_2023_09
 from openjd.model.v2023_09 import DataString as DataString_2023_09
 from openjd.model.v2023_09 import (
@@ -635,7 +636,7 @@ class TestScriptRunnerBase:
         logger = build_logger(queue_handler)
         with TerminatingRunner(logger=logger, session_working_directory=tmp_path) as runner:
             # WHEN
-            runner._run_action(action, symtab)
+            runner._run_action(action, symtab, get_default_library())
             # wait for the process to exit
             while runner.state == ScriptRunnerState.RUNNING:
                 time.sleep(0.2)
@@ -696,7 +697,9 @@ class TestScriptRunnerBase:
         logger = build_logger(queue_handler)
         with TerminatingRunner(logger=logger, session_working_directory=tmp_path) as runner:
             # WHEN
-            runner._run_action(action, symtab, default_timeout=default_timeout)
+            runner._run_action(
+                action, symtab, get_default_library(), default_timeout=default_timeout
+            )
             # wait for the process to exit
             while runner.state == ScriptRunnerState.RUNNING:
                 time.sleep(0.2)
@@ -736,7 +739,7 @@ class TestScriptRunnerBase:
         logger = build_logger(queue_handler)
         with TerminatingRunner(logger=logger, session_working_directory=tmp_path) as runner:
             # WHEN
-            runner._run_action(action, symtab)
+            runner._run_action(action, symtab, get_default_library())
 
         # THEN
         assert runner.state == ScriptRunnerState.FAILED
@@ -1030,12 +1033,14 @@ class TestScriptRunnerBase:
             symtab = SymbolTable()
 
             # WHEN
-            runner._materialize_files(EmbeddedFilesScope.STEP, [test_file], tmp_path, symtab)
+            runner._materialize_files(
+                EmbeddedFilesScope.STEP, [test_file], tmp_path, symtab, get_default_library()
+            )
 
         # THEN
         assert runner.state == ScriptRunnerState.READY
         assert os.path.exists(tmp_path / "test_materialize_files.txt")
-        assert len(symtab.symbols) == 1
+        assert len(symtab.keys) == 1
 
     @pytest.mark.usefixtures("message_queue", "queue_handler")
     def test_materialize_files_fails(
@@ -1062,7 +1067,9 @@ class TestScriptRunnerBase:
             symtab = SymbolTable()
 
             # WHEN
-            runner._materialize_files(EmbeddedFilesScope.STEP, [test_file], dest_dir, symtab)
+            runner._materialize_files(
+                EmbeddedFilesScope.STEP, [test_file], dest_dir, symtab, get_default_library()
+            )
 
         # THEN
         assert runner.state == ScriptRunnerState.FAILED
