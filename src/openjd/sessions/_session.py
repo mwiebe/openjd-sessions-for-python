@@ -27,6 +27,16 @@ from ._types import (
     StepScriptModel,
 )
 
+# Bridge Rust logging (openjd_sessions) to Python logging (openjd.sessions).
+# pyo3-log sends Rust log records to Python logger "openjd_sessions" (underscore),
+# but the CLI/worker attach handlers to "openjd.sessions" (dot). We redirect by
+# adding the Python logger's handlers to the Rust logger.
+import logging as _logging
+_rust_logger = _logging.getLogger("openjd_sessions")
+_py_logger = _logging.getLogger("openjd.sessions")
+_rust_logger.parent = _py_logger
+_rust_logger.setLevel(_logging.DEBUG)
+
 SessionCallbackType = Callable[[str, ActionStatus], None]
 
 __all__ = [
