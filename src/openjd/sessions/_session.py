@@ -88,6 +88,7 @@ class Session:
             retain_working_dir=retain_working_dir,
             os_env_vars=os_env_vars,
             session_root_directory=str(session_root_directory) if session_root_directory else None,
+            user=user,
         )
 
     def _poll_for_completion(self):
