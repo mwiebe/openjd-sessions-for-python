@@ -15,33 +15,33 @@ from subprocess import DEVNULL, run
 
 import pytest
 
-from openjd.model import (
+from openjd.model.v1 import (
     ParameterValue,
     ParameterValueType,
     SpecificationRevision,
     RevisionExtensions,
 )
 from openjd.expr import ExprType, ExprValue, SymbolTable
-from openjd.model.v2023_09 import Action as Action_2023_09
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import Action as Action_2023_09
+from openjd.model.v1.v2023_09 import (
     EmbeddedFileText as EmbeddedFileText_2023_09,
 )
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import (
     EmbeddedFileTypes as EmbeddedFileTypes_2023_09,
 )
-from openjd.model.v2023_09 import Environment as Environment_2023_09
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import Environment as Environment_2023_09
+from openjd.model.v1.v2023_09 import (
     EnvironmentActions as EnvironmentActions_2023_09,
 )
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import (
     EnvironmentScript as EnvironmentScript_2023_09,
     CommandString as CommandString_2023_09,
     ArgString as ArgString_2023_09,
     DataString as DataString_2023_09,
     EnvironmentVariableValueString as EnvironmentVariableValueString_2023_09,
 )
-from openjd.model.v2023_09 import StepActions as StepActions_2023_09
-from openjd.model.v2023_09 import StepScript as StepScript_2023_09
+from openjd.model.v1.v2023_09 import StepActions as StepActions_2023_09
+from openjd.model.v1.v2023_09 import StepScript as StepScript_2023_09
 from openjd.sessions import (
     LOG,
     ActionState,

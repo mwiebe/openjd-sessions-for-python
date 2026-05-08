@@ -14,15 +14,15 @@ import pytest
 
 from openjd.expr import get_default_library
 from openjd.expr import SymbolTable
-from openjd.model.v2023_09 import Action as Action_2023_09
-from openjd.model.v2023_09 import DataString as DataString_2023_09
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import Action as Action_2023_09
+from openjd.model.v1.v2023_09 import DataString as DataString_2023_09
+from openjd.model.v1.v2023_09 import (
     EmbeddedFileText as EmbeddedFileText_2023_09,
 )
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import (
     EmbeddedFileTypes as EmbeddedFileTypes_2023_09,
 )
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import (
     CommandString as CommandString_2023_09,
     ArgString as ArgString_2023_09,
 )

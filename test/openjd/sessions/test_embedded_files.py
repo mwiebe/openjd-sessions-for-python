@@ -13,14 +13,14 @@ from utils.windows_acl_helper import MODIFY_READ_WRITE_MASK, principal_has_acces
 
 from openjd.expr import get_default_library
 from openjd.expr import ExprValue, SymbolTable
-from openjd.model.v2023_09 import DataString as DataString_2023_09
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import DataString as DataString_2023_09
+from openjd.model.v1.v2023_09 import (
     EmbeddedFileText as EmbeddedFileText_2023_09,
 )
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import (
     EmbeddedFileTypes as EmbeddedFileTypes_2023_09,
 )
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import (
     EndOfLine as EndOfLine_2023_09,
 )
 from openjd.sessions._embedded_files import EmbeddedFiles, EmbeddedFilesScope

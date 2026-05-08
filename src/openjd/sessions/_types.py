@@ -2,7 +2,7 @@
 
 # Re-export types from Rust bindings and model.
 from openjd._openjd_rs import ActionState
-from openjd.model import (
+from openjd.model.v1 import (
     Action as Action_2023_09,
     EmbeddedFile as EmbeddedFileText_2023_09,
     Environment as Environment_2023_09,

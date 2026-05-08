@@ -13,29 +13,29 @@ import pytest
 
 from openjd.expr import get_default_library
 from openjd.expr import SymbolTable
-from openjd.model._parse import _parse_model
-from openjd.model.v2023_09 import Action as Action_2023_09
-from openjd.model.v2023_09 import (
+from openjd.model.v1._parse import _parse_model
+from openjd.model.v1.v2023_09 import Action as Action_2023_09
+from openjd.model.v1.v2023_09 import (
     CancelationMethodNotifyThenTerminate as CancelationMethodNotifyThenTerminate_2023_09,
 )
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import (
     CancelationMethodTerminate as CancelationMethodTerminate_2023_09,
 )
-from openjd.model.v2023_09 import CancelationMode as CancelationMode_2023_09
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import CancelationMode as CancelationMode_2023_09
+from openjd.model.v1.v2023_09 import (
     EmbeddedFileText as EmbeddedFileText_2023_09,
 )
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import (
     EmbeddedFileTypes as EmbeddedFileTypes_2023_09,
 )
-from openjd.model.v2023_09 import (
+from openjd.model.v1.v2023_09 import (
     CommandString as CommandString_2023_09,
     ArgString as ArgString_2023_09,
     DataString as DataString_2023_09,
 )
-from openjd.model.v2023_09 import StepActions as StepActions_2023_09
-from openjd.model.v2023_09 import StepScript as StepScript_2023_09
-from openjd.model.v2023_09 import ModelParsingContext as ModelParsingContext_2023_09
+from openjd.model.v1.v2023_09 import StepActions as StepActions_2023_09
+from openjd.model.v1.v2023_09 import StepScript as StepScript_2023_09
+from openjd.model.v1.v2023_09 import ModelParsingContext as ModelParsingContext_2023_09
 
 from openjd.sessions import WindowsSessionUser
 from openjd.sessions._runner_base import ScriptRunnerState
@@ -363,7 +363,7 @@ class TestStepScriptRunner:
         python_exe: str,
     ) -> None:
         """Test that script-level let bindings are evaluated and available in args."""
-        from openjd.model.v2023_09 import LetBinding, ModelParsingContext
+        from openjd.model.v1.v2023_09 import LetBinding, ModelParsingContext
 
         # GIVEN
         ctx = ModelParsingContext(supported_extensions=["EXPR"])
@@ -405,7 +405,7 @@ class TestStepScriptRunner:
         python_exe: str,
     ) -> None:
         """Test that let bindings can reference Task.Param.* values."""
-        from openjd.model.v2023_09 import LetBinding, ModelParsingContext
+        from openjd.model.v1.v2023_09 import LetBinding, ModelParsingContext
 
         # GIVEN
         ctx = ModelParsingContext(supported_extensions=["EXPR"])
@@ -447,7 +447,7 @@ class TestStepScriptRunner:
         python_exe: str,
     ) -> None:
         """Test that later let bindings can reference earlier ones."""
-        from openjd.model.v2023_09 import LetBinding, ModelParsingContext
+        from openjd.model.v1.v2023_09 import LetBinding, ModelParsingContext
 
         # GIVEN
         ctx = ModelParsingContext(supported_extensions=["EXPR"])
