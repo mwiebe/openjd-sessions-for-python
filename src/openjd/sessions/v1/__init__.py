@@ -18,9 +18,17 @@ from ._types import (
 )
 from ._version import version
 
+# Rust-backed types
+from openjd._openjd_rs import (
+    ScriptRunnerState,
+    ActionResult,
+    SessionError as SessionRuntimeError,
+)
+
 __all__ = (
     "ActionState",
     "ActionStatus",
+    "ActionResult",
     "EnvironmentIdentifier",
     "EnvironmentModel",
     "EnvironmentScriptModel",
@@ -29,8 +37,10 @@ __all__ = (
     "PathFormat",
     "PathMappingRule",
     "PosixSessionUser",
+    "ScriptRunnerState",
     "Session",
     "SessionCallbackType",
+    "SessionRuntimeError",
     "SessionState",
     "SessionUser",
     "StepScriptModel",

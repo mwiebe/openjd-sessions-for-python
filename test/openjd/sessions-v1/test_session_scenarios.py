@@ -68,7 +68,7 @@ from openjd.model.v1 import (
     ParameterValueType,
     StepParameterSpaceIterator,
 )
-from openjd.sessions import Session, PathMappingRule
+from openjd.sessions.v1 import Session, PathMappingRule
 
 
 SCENARIOS_DIR = Path(__file__).parent / "scenarios"

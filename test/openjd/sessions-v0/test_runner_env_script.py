@@ -10,32 +10,29 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openjd.expr import get_default_library
-from openjd.expr import SymbolTable
-from openjd.model.v1._parse import _parse_model
-from openjd.model.v1.v2023_09 import Action as Action_2023_09
-from openjd.model.v1.v2023_09 import (
+from openjd.model import SymbolTable
+from openjd.model.v2023_09 import Action as Action_2023_09
+from openjd.model.v2023_09 import (
     CancelationMethodNotifyThenTerminate as CancelationMethodNotifyThenTerminate_2023_09,
 )
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import (
     CancelationMethodTerminate as CancelationMethodTerminate_2023_09,
 )
-from openjd.model.v1.v2023_09 import CancelationMode as CancelationMode_2023_09
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import CancelationMode as CancelationMode_2023_09
+from openjd.model.v2023_09 import (
     EmbeddedFileText as EmbeddedFileText_2023_09,
 )
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import (
     EmbeddedFileTypes as EmbeddedFileTypes_2023_09,
 )
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import (
     EnvironmentActions as EnvironmentActions_2023_09,
 )
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import (
     EnvironmentScript as EnvironmentScript_2023_09,
     CommandString as CommandString_2023_09,
     ArgString as ArgString_2023_09,
     DataString as DataString_2023_09,
-    ModelParsingContext as ModelParsingContext_2023_09,
 )
 from openjd.sessions import ActionState
 from openjd.sessions._runner_base import ScriptRunnerState
@@ -87,14 +84,13 @@ class TestEnvironmentScriptRunner:
 
         # GIVEN
         script = EnvironmentScript_2023_09(actions=env_actions)
-        symtab = SymbolTable({"Task.Command": python_exe})
+        symtab = SymbolTable(source={"Task.Command": python_exe})
         logger = build_logger(queue_handler)
         runner = EnvironmentScriptRunner(
             logger=logger,
             session_working_directory=tmp_path,
             environment_script=script,
             symtab=symtab,
-            library=get_default_library(),
             session_files_directory=tmp_path,
         )
 
@@ -149,7 +145,7 @@ class TestEnvironmentScriptRunner:
 
         # GIVEN
         script = EnvironmentScript_2023_09(actions=env_actions)
-        symtab = SymbolTable({"Task.Command": python_exe})
+        symtab = SymbolTable(source={"Task.Command": python_exe})
         logger = build_logger(queue_handler)
         callback = MagicMock()
         runner = EnvironmentScriptRunner(
@@ -157,7 +153,6 @@ class TestEnvironmentScriptRunner:
             session_working_directory=tmp_path,
             environment_script=script,
             symtab=symtab,
-            library=get_default_library(),
             session_files_directory=tmp_path,
             callback=callback,
         )
@@ -182,7 +177,7 @@ class TestEnvironmentScriptRunner:
         # a) Don't explode;
         # b) Don't run anything; and
         # c) Invoke the callback
-        symtab = SymbolTable({"Task.Command": python_exe})
+        symtab = SymbolTable(source={"Task.Command": python_exe})
         logger = build_logger(queue_handler)
         callbackOnEnter = MagicMock()
         callbackOnExit = MagicMock()
@@ -191,7 +186,6 @@ class TestEnvironmentScriptRunner:
             session_working_directory=tmp_path,
             environment_script=None,
             symtab=symtab,
-            library=get_default_library(),
             session_files_directory=tmp_path,
             callback=callbackOnEnter,
         )
@@ -200,7 +194,6 @@ class TestEnvironmentScriptRunner:
             session_working_directory=tmp_path,
             environment_script=None,
             symtab=symtab,
-            library=get_default_library(),
             session_files_directory=tmp_path,
             callback=callbackOnExit,
         )
@@ -259,14 +252,13 @@ class TestEnvironmentScriptRunner:
                 )
             ],
         )
-        symtab = SymbolTable({"Task.Command": python_exe})
+        symtab = SymbolTable(source={"Task.Command": python_exe})
         logger = build_logger(queue_handler)
         runner = EnvironmentScriptRunner(
             logger=logger,
             session_working_directory=tmp_path,
             environment_script=script,
             symtab=symtab,
-            library=get_default_library(),
             session_files_directory=tmp_path,
         )
 
@@ -282,7 +274,7 @@ class TestEnvironmentScriptRunner:
         assert runner.state == ScriptRunnerState.SUCCESS
         messages = collect_queue_messages(message_queue)
         assert "Hello" in messages
-        assert len(symtab.keys) == 1
+        assert len(symtab.symbols) == 1
 
     @pytest.mark.parametrize(
         "env_actions",
@@ -331,14 +323,13 @@ class TestEnvironmentScriptRunner:
                 )
             ],
         )
-        symtab = SymbolTable({"Task.Command": python_exe})
+        symtab = SymbolTable(source={"Task.Command": python_exe})
         callback = MagicMock()
         runner = EnvironmentScriptRunner(
             logger=MagicMock(),
             session_working_directory=tmp_path,
             environment_script=script,
             symtab=symtab,
-            library=get_default_library(),
             session_files_directory=tmp_path,
             callback=callback,
         )
@@ -409,13 +400,12 @@ class TestEnvironmentScriptRunner:
                     )
                 )
 
-                symtab = SymbolTable({"Task.Command": python_exe})
+                symtab = SymbolTable(source={"Task.Command": python_exe})
                 runner = EnvironmentScriptRunner(
                     logger=MagicMock(),
                     session_working_directory=tmp_path,
                     environment_script=script,
                     symtab=symtab,
-                    library=get_default_library(),
                     session_files_directory=tmp_path,
                 )
                 runner.enter()
@@ -455,13 +445,12 @@ class TestEnvironmentScriptRunner:
             )
         )
 
-        symtab = SymbolTable({"Task.Command": python_exe})
+        symtab = SymbolTable(source={"Task.Command": python_exe})
         runner = EnvironmentScriptRunner(
             logger=MagicMock(),
             session_working_directory=tmp_path,
             environment_script=script,
             symtab=symtab,
-            library=get_default_library(),
             session_files_directory=tmp_path,
         )
         with (
@@ -475,12 +464,11 @@ class TestEnvironmentScriptRunner:
             )
 
         # THEN
-        mock_run_action.assert_called_once()
-        call_args = mock_run_action.call_args
-        assert call_args[0][0] is action
-        assert call_args[0][1]._table == symtab._table
-        assert call_args[0][2] is runner._library
-        assert call_args[1]["default_timeout"] == default_timeout
+        mock_run_action.assert_called_once_with(
+            action,
+            symtab,
+            default_timeout=default_timeout,
+        )
 
     def test_exit_uses_default_timeout(
         self,
@@ -500,13 +488,12 @@ class TestEnvironmentScriptRunner:
             )
         )
 
-        symtab = SymbolTable({"Task.Command": python_exe})
+        symtab = SymbolTable(source={"Task.Command": python_exe})
         runner = EnvironmentScriptRunner(
             logger=MagicMock(),
             session_working_directory=tmp_path,
             environment_script=script,
             symtab=symtab,
-            library=get_default_library(),
             session_files_directory=tmp_path,
         )
         with (
@@ -521,132 +508,3 @@ class TestEnvironmentScriptRunner:
             on_exit_action,
             default_timeout=expected_default_timeout,
         )
-
-    def test_run_with_let_bindings(
-        self,
-        tmp_path: Path,
-        message_queue: SimpleQueue,
-        queue_handler: QueueHandler,
-        python_exe: str,
-    ) -> None:
-        """Test that environment script let bindings are evaluated and available."""
-        from openjd.model.v1.v2023_09 import LetBinding, ModelParsingContext
-
-        ctx = ModelParsingContext(supported_extensions=["EXPR"])
-        script = EnvironmentScript_2023_09(
-            let=[LetBinding("env_msg = 'Hello from env let'", context=ctx)],
-            actions=EnvironmentActions_2023_09(
-                onEnter=Action_2023_09(
-                    command=CommandString_2023_09("{{ Task.Command }}"),
-                    args=[ArgString_2023_09("-c"), ArgString_2023_09("print('{{ env_msg }}')")],
-                )
-            ),
-        )
-        symtab = SymbolTable({"Task.Command": python_exe})
-        logger = build_logger(queue_handler)
-        runner = EnvironmentScriptRunner(
-            logger=logger,
-            session_working_directory=tmp_path,
-            environment_script=script,
-            symtab=symtab,
-            library=get_default_library(),
-            session_files_directory=tmp_path,
-        )
-
-        runner.enter()
-        while runner.state == ScriptRunnerState.RUNNING:
-            time.sleep(0.2)
-
-        assert runner.state == ScriptRunnerState.SUCCESS
-        messages = collect_queue_messages(message_queue)
-        assert "Hello from env let" in messages
-
-    def test_run_with_chained_let_bindings(
-        self,
-        tmp_path: Path,
-        message_queue: SimpleQueue,
-        queue_handler: QueueHandler,
-        python_exe: str,
-    ) -> None:
-        """Test that later let bindings can reference earlier ones in env script."""
-        from openjd.model.v1.v2023_09 import LetBinding, ModelParsingContext
-
-        ctx = ModelParsingContext(supported_extensions=["EXPR"])
-        script = EnvironmentScript_2023_09(
-            let=[
-                LetBinding("a = 7", context=ctx),
-                LetBinding("b = a * 3", context=ctx),
-                LetBinding("result = 'Value: ' + string(b)", context=ctx),
-            ],
-            actions=EnvironmentActions_2023_09(
-                onEnter=Action_2023_09(
-                    command=CommandString_2023_09("{{ Task.Command }}"),
-                    args=[ArgString_2023_09("-c"), ArgString_2023_09("print('{{ result }}')")],
-                )
-            ),
-        )
-        symtab = SymbolTable({"Task.Command": python_exe})
-        logger = build_logger(queue_handler)
-        runner = EnvironmentScriptRunner(
-            logger=logger,
-            session_working_directory=tmp_path,
-            environment_script=script,
-            symtab=symtab,
-            library=get_default_library(),
-            session_files_directory=tmp_path,
-        )
-
-        runner.enter()
-        while runner.state == ScriptRunnerState.RUNNING:
-            time.sleep(0.2)
-
-        assert runner.state == ScriptRunnerState.SUCCESS
-        messages = collect_queue_messages(message_queue)
-        # b = 7 * 3 = 21
-        assert "Value: 21" in messages
-
-    def test_run_with_let_binding_runtime_error(
-        self,
-        tmp_path: Path,
-        message_queue: SimpleQueue,
-        queue_handler: QueueHandler,
-        python_exe: str,
-    ) -> None:
-        """Test that runtime errors in let binding evaluation cause env action failure."""
-        ctx = ModelParsingContext_2023_09(supported_extensions=["EXPR"])
-        script = _parse_model(
-            model=EnvironmentScript_2023_09,
-            obj={
-                "let": ["bad = 1 // Task.Param.Divisor"],
-                "actions": {
-                    "onEnter": {
-                        "command": "{{ Task.Command }}",
-                        "args": ["-c", "print('{{ bad }}')"],
-                    }
-                },
-            },
-            context=ctx,
-        )
-        symtab = SymbolTable({"Task.Command": python_exe, "Task.Param.Divisor": 0})
-        logger = build_logger(queue_handler)
-        runner = EnvironmentScriptRunner(
-            logger=logger,
-            session_working_directory=tmp_path,
-            environment_script=script,
-            symtab=symtab,
-            library=get_default_library(),
-            session_files_directory=tmp_path,
-        )
-
-        runner.enter()
-        while runner.state == ScriptRunnerState.RUNNING:
-            time.sleep(0.2)
-
-        assert runner.state == ScriptRunnerState.FAILED
-        messages = collect_queue_messages(message_queue)
-        expected = [
-            "openjd_fail: Error evaluating let binding 'bad': Division by zero\n",
-            "  bad = 1 // Task.Param.Divisor\n",
-            "        ~~^~~~~~~~~~~~~~~~~~~~~",
-        ]
-        assert "".join(expected) in messages

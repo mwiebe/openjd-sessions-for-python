@@ -16,7 +16,7 @@ from openjd.sessions import PosixSessionUser, WindowsSessionUser, BadCredentials
 from openjd.sessions._os_checker import is_posix, is_windows
 from openjd.sessions._logging import LoggerAdapter
 from openjd.sessions._action_filter import ActionMonitoringFilter
-from openjd.model.v1 import RevisionExtensions, SpecificationRevision
+from openjd.model import RevisionExtensions, SpecificationRevision
 
 if is_windows():
     from openjd.sessions._win32._helpers import (  # type: ignore

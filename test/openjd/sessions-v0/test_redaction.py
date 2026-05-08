@@ -11,7 +11,7 @@ from openjd.sessions._action_filter import (
     ActionMessageKind,
     redact_openjd_redacted_env_requests,
 )
-from openjd.model.v1 import RevisionExtensions, SpecificationRevision
+from openjd.model import RevisionExtensions, SpecificationRevision
 
 from .conftest import setup_action_filter_test
 

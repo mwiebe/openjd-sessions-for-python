@@ -11,31 +11,28 @@ import os
 
 import pytest
 
-from openjd.expr import get_default_library
-from openjd.expr import SymbolTable
-from openjd.model.v1._parse import _parse_model
-from openjd.model.v1.v2023_09 import Action as Action_2023_09
-from openjd.model.v1.v2023_09 import (
+from openjd.model import SymbolTable
+from openjd.model.v2023_09 import Action as Action_2023_09
+from openjd.model.v2023_09 import (
     CancelationMethodNotifyThenTerminate as CancelationMethodNotifyThenTerminate_2023_09,
 )
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import (
     CancelationMethodTerminate as CancelationMethodTerminate_2023_09,
 )
-from openjd.model.v1.v2023_09 import CancelationMode as CancelationMode_2023_09
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import CancelationMode as CancelationMode_2023_09
+from openjd.model.v2023_09 import (
     EmbeddedFileText as EmbeddedFileText_2023_09,
 )
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import (
     EmbeddedFileTypes as EmbeddedFileTypes_2023_09,
 )
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import (
     CommandString as CommandString_2023_09,
     ArgString as ArgString_2023_09,
     DataString as DataString_2023_09,
 )
-from openjd.model.v1.v2023_09 import StepActions as StepActions_2023_09
-from openjd.model.v1.v2023_09 import StepScript as StepScript_2023_09
-from openjd.model.v1.v2023_09 import ModelParsingContext as ModelParsingContext_2023_09
+from openjd.model.v2023_09 import StepActions as StepActions_2023_09
+from openjd.model.v2023_09 import StepScript as StepScript_2023_09
 
 from openjd.sessions import WindowsSessionUser
 from openjd.sessions._runner_base import ScriptRunnerState
@@ -77,14 +74,13 @@ class TestStepScriptRunner:
                 )
             )
         )
-        symtab = SymbolTable({"Task.Command": python_exe})
+        symtab = SymbolTable(source={"Task.Command": python_exe})
         logger = build_logger(queue_handler)
         runner = StepScriptRunner(
             logger=logger,
             session_working_directory=tmp_path,
             script=script,
             symtab=symtab,
-            library=get_default_library(),
             session_files_directory=tmp_path,
         )
 
@@ -123,14 +119,13 @@ class TestStepScriptRunner:
                 )
             ],
         )
-        symtab = SymbolTable({"Task.Command": python_exe})
+        symtab = SymbolTable(source={"Task.Command": python_exe})
         logger = build_logger(queue_handler)
         runner = StepScriptRunner(
             logger=logger,
             session_working_directory=tmp_path,
             script=script,
             symtab=symtab,
-            library=get_default_library(),
             session_files_directory=tmp_path,
         )
 
@@ -143,7 +138,7 @@ class TestStepScriptRunner:
         assert runner.state == ScriptRunnerState.SUCCESS
         messages = collect_queue_messages(message_queue)
         assert "Hello" in messages
-        assert len(symtab.keys) == 1
+        assert len(symtab.symbols) == 1
 
     @pytest.mark.parametrize(
         "os_env_vars",
@@ -200,7 +195,6 @@ class TestStepScriptRunner:
             session_working_directory=tmp_path,
             script=script,
             symtab=symtab,
-            library=get_default_library(),
             session_files_directory=tmp_path,
             os_env_vars=os_env_vars,
         )
@@ -270,13 +264,12 @@ class TestStepScriptRunner:
                         )
                     )
                 )
-                symtab = SymbolTable({"Task.Command": python_exe})
+                symtab = SymbolTable(source={"Task.Command": python_exe})
                 runner = StepScriptRunner(
                     logger=MagicMock(),
                     session_working_directory=tmp_path,
                     script=script,
                     symtab=symtab,
-                    library=get_default_library(),
                     session_files_directory=tmp_path,
                 )
                 runner.run()
@@ -337,7 +330,6 @@ class TestStepScriptRunner:
             session_working_directory=tmpdir.path,
             script=script,
             symtab=symtab,
-            library=get_default_library(),
             session_files_directory=tmpdir.path,
             os_env_vars=os_env_vars,
             user=windows_user,
@@ -354,183 +346,3 @@ class TestStepScriptRunner:
         assert runner.state == ScriptRunnerState.SUCCESS
         messages = collect_queue_messages(message_queue)
         assert "Hello!" in messages
-
-    def test_run_with_let_bindings(
-        self,
-        tmp_path: Path,
-        message_queue: SimpleQueue,
-        queue_handler: QueueHandler,
-        python_exe: str,
-    ) -> None:
-        """Test that script-level let bindings are evaluated and available in args."""
-        from openjd.model.v1.v2023_09 import LetBinding, ModelParsingContext
-
-        # GIVEN
-        ctx = ModelParsingContext(supported_extensions=["EXPR"])
-        script = StepScript_2023_09(
-            let=[LetBinding("greeting = 'Hello from let binding'", context=ctx)],
-            actions=StepActions_2023_09(
-                onRun=Action_2023_09(
-                    command=CommandString_2023_09("{{ Task.Command }}"),
-                    args=[ArgString_2023_09("-c"), ArgString_2023_09("print('{{ greeting }}')")],
-                )
-            ),
-        )
-        symtab = SymbolTable({"Task.Command": python_exe})
-        logger = build_logger(queue_handler)
-        runner = StepScriptRunner(
-            logger=logger,
-            session_working_directory=tmp_path,
-            script=script,
-            symtab=symtab,
-            library=get_default_library(),
-            session_files_directory=tmp_path,
-        )
-
-        # WHEN
-        runner.run()
-        while runner.state == ScriptRunnerState.RUNNING:
-            time.sleep(0.2)
-
-        # THEN
-        assert runner.state == ScriptRunnerState.SUCCESS
-        messages = collect_queue_messages(message_queue)
-        assert "Hello from let binding" in messages
-
-    def test_run_with_let_bindings_referencing_task_param(
-        self,
-        tmp_path: Path,
-        message_queue: SimpleQueue,
-        queue_handler: QueueHandler,
-        python_exe: str,
-    ) -> None:
-        """Test that let bindings can reference Task.Param.* values."""
-        from openjd.model.v1.v2023_09 import LetBinding, ModelParsingContext
-
-        # GIVEN
-        ctx = ModelParsingContext(supported_extensions=["EXPR"])
-        script = StepScript_2023_09(
-            let=[LetBinding("msg = 'Frame ' + string(Task.Param.Frame)", context=ctx)],
-            actions=StepActions_2023_09(
-                onRun=Action_2023_09(
-                    command=CommandString_2023_09("{{ Task.Command }}"),
-                    args=[ArgString_2023_09("-c"), ArgString_2023_09("print('{{ msg }}')")],
-                )
-            ),
-        )
-        symtab = SymbolTable({"Task.Command": python_exe, "Task.Param.Frame": 42})
-        logger = build_logger(queue_handler)
-        runner = StepScriptRunner(
-            logger=logger,
-            session_working_directory=tmp_path,
-            script=script,
-            symtab=symtab,
-            library=get_default_library(),
-            session_files_directory=tmp_path,
-        )
-
-        # WHEN
-        runner.run()
-        while runner.state == ScriptRunnerState.RUNNING:
-            time.sleep(0.2)
-
-        # THEN
-        assert runner.state == ScriptRunnerState.SUCCESS
-        messages = collect_queue_messages(message_queue)
-        assert "Frame 42" in messages
-
-    def test_run_with_chained_let_bindings(
-        self,
-        tmp_path: Path,
-        message_queue: SimpleQueue,
-        queue_handler: QueueHandler,
-        python_exe: str,
-    ) -> None:
-        """Test that later let bindings can reference earlier ones."""
-        from openjd.model.v1.v2023_09 import LetBinding, ModelParsingContext
-
-        # GIVEN
-        ctx = ModelParsingContext(supported_extensions=["EXPR"])
-        script = StepScript_2023_09(
-            let=[
-                LetBinding("a = 10", context=ctx),
-                LetBinding("b = a * 2", context=ctx),
-                LetBinding("result = 'Result: ' + string(b)", context=ctx),
-            ],
-            actions=StepActions_2023_09(
-                onRun=Action_2023_09(
-                    command=CommandString_2023_09("{{ Task.Command }}"),
-                    args=[ArgString_2023_09("-c"), ArgString_2023_09("print('{{ result }}')")],
-                )
-            ),
-        )
-        symtab = SymbolTable({"Task.Command": python_exe})
-        logger = build_logger(queue_handler)
-        runner = StepScriptRunner(
-            logger=logger,
-            session_working_directory=tmp_path,
-            script=script,
-            symtab=symtab,
-            library=get_default_library(),
-            session_files_directory=tmp_path,
-        )
-
-        # WHEN
-        runner.run()
-        while runner.state == ScriptRunnerState.RUNNING:
-            time.sleep(0.2)
-
-        # THEN
-        assert runner.state == ScriptRunnerState.SUCCESS
-        messages = collect_queue_messages(message_queue)
-        # b = 10 * 2 = 20
-        assert "Result: 20" in messages
-
-    def test_run_with_let_binding_runtime_error(
-        self,
-        tmp_path: Path,
-        message_queue: SimpleQueue,
-        queue_handler: QueueHandler,
-        python_exe: str,
-    ) -> None:
-        """Test that runtime errors in let binding evaluation cause task failure."""
-        # GIVEN - a let binding that will fail at runtime (division by zero)
-        ctx = ModelParsingContext_2023_09(supported_extensions=["EXPR"])
-        script = _parse_model(
-            model=StepScript_2023_09,
-            obj={
-                "let": ["bad = 1 // Task.Param.Divisor"],
-                "actions": {
-                    "onRun": {
-                        "command": "{{ Task.Command }}",
-                        "args": ["-c", "print('{{ bad }}')"],
-                    }
-                },
-            },
-            context=ctx,
-        )
-        symtab = SymbolTable({"Task.Command": python_exe, "Task.Param.Divisor": 0})
-        logger = build_logger(queue_handler)
-        runner = StepScriptRunner(
-            logger=logger,
-            session_working_directory=tmp_path,
-            script=script,
-            symtab=symtab,
-            library=get_default_library(),
-            session_files_directory=tmp_path,
-        )
-
-        # WHEN
-        runner.run()
-        while runner.state == ScriptRunnerState.RUNNING:
-            time.sleep(0.2)
-
-        # THEN - task should fail due to division by zero
-        assert runner.state == ScriptRunnerState.FAILED
-        messages = collect_queue_messages(message_queue)
-        expected = [
-            "openjd_fail: Error evaluating let binding 'bad': Division by zero\n",
-            "  bad = 1 // Task.Param.Divisor\n",
-            "        ~~^~~~~~~~~~~~~~~~~~~~~",
-        ]
-        assert "".join(expected) in messages

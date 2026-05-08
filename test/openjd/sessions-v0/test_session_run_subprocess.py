@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from openjd.model.v1 import ParameterValue
-from openjd.model.v1.v2023_09 import Environment as Environment_2023_09
-from openjd.model.v1.v2023_09 import (
+from openjd.model import ParameterValue
+from openjd.model.v2023_09 import Environment as Environment_2023_09
+from openjd.model.v2023_09 import (
     EnvironmentVariableValueString as EnvironmentVariableValueString_2023_09,
 )
 from openjd.sessions import (

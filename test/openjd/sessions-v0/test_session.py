@@ -15,33 +15,33 @@ from subprocess import DEVNULL, run
 
 import pytest
 
-from openjd.model.v1 import (
+from openjd.model import (
     ParameterValue,
     ParameterValueType,
     SpecificationRevision,
+    SymbolTable,
     RevisionExtensions,
 )
-from openjd.expr import ExprType, ExprValue, SymbolTable
-from openjd.model.v1.v2023_09 import Action as Action_2023_09
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import Action as Action_2023_09
+from openjd.model.v2023_09 import (
     EmbeddedFileText as EmbeddedFileText_2023_09,
 )
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import (
     EmbeddedFileTypes as EmbeddedFileTypes_2023_09,
 )
-from openjd.model.v1.v2023_09 import Environment as Environment_2023_09
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import Environment as Environment_2023_09
+from openjd.model.v2023_09 import (
     EnvironmentActions as EnvironmentActions_2023_09,
 )
-from openjd.model.v1.v2023_09 import (
+from openjd.model.v2023_09 import (
     EnvironmentScript as EnvironmentScript_2023_09,
     CommandString as CommandString_2023_09,
     ArgString as ArgString_2023_09,
     DataString as DataString_2023_09,
     EnvironmentVariableValueString as EnvironmentVariableValueString_2023_09,
 )
-from openjd.model.v1.v2023_09 import StepActions as StepActions_2023_09
-from openjd.model.v1.v2023_09 import StepScript as StepScript_2023_09
+from openjd.model.v2023_09 import StepActions as StepActions_2023_09
+from openjd.model.v2023_09 import StepScript as StepScript_2023_09
 from openjd.sessions import (
     LOG,
     ActionState,
@@ -52,12 +52,11 @@ from openjd.sessions import (
     SessionState,
     LogContent,
 )
-from openjd.expr import _path_mapping as path_mapping_impl_mod
+from openjd.sessions import _path_mapping as path_mapping_impl_mod
 from openjd.sessions._action_filter import ActionMessageKind
 from openjd.sessions._os_checker import is_posix, is_windows
 from openjd.sessions._logging import LoggerAdapter, LogExtraInfo
 from openjd.sessions._session import (
-    _param_type_to_expr_type,
     EnvironmentVariableChange,
     EnvironmentVariableSetChange,
     EnvironmentVariableUnsetChange,
@@ -76,14 +75,6 @@ from .conftest import (
 
 def _environment_from_script(script: EnvironmentScript_2023_09) -> Environment_2023_09:
     return Environment_2023_09(name="DefinitelyNotAFakeEnvironment", script=script)
-
-
-class TestParamTypeToExprType:
-    """Tests for the _param_type_to_expr_type mapping function."""
-
-    def test_chunk_int_maps_to_range_expr(self) -> None:
-        """CHUNK[INT] task parameters must map to range_expr type for expressions like list(Task.Param.Frame) to work."""
-        assert _param_type_to_expr_type(ParameterValueType.CHUNK_INT) == ExprType.RANGE_EXPR
 
 
 class TestSessionLogging:
@@ -2079,60 +2070,13 @@ class TestPathMapping_v2023_09:  # noqa: N801
             session._materialize_path_mapping(SpecificationRevision.v2023_09, env_vars, symtab)
 
             # THEN
-            has_rules = symtab["Session.HasPathMappingRules"]
-            assert isinstance(has_rules, ExprValue)
-            assert has_rules.to_string() == ("true" if rules else "false")
+            assert symtab["Session.HasPathMappingRules"] == ("true" if rules else "false")
             assert "Session.PathMappingRulesFile" in symtab
-            rules_file = symtab["Session.PathMappingRulesFile"]
-            assert isinstance(rules_file, ExprValue)
-            filename = rules_file.to_string()
+            filename = symtab["Session.PathMappingRulesFile"]
             assert os.path.exists(filename)
             with open(filename, "r") as file:
                 contents = file.read()
             assert contents == expected_json
-
-    @pytest.mark.parametrize(
-        "rules, expected_has_rules",
-        [
-            pytest.param(None, False, id="no rules"),
-            pytest.param(
-                [
-                    PathMappingRule(
-                        source_path_format=PathFormat.POSIX,
-                        source_path=PurePosixPath("/mnt/share"),
-                        destination_path=PurePosixPath("/local"),
-                    )
-                ],
-                True,
-                id="with rules",
-            ),
-        ],
-    )
-    def test_materialize_expr_types(
-        self,
-        rules: Optional[list[PathMappingRule]],
-        expected_has_rules: bool,
-        session_id: str,
-    ) -> None:
-        """When EXPR extension is enabled, session symbols must have proper ExprTypes."""
-        # GIVEN
-        job_params = dict[str, ParameterValue]()
-        env_vars = dict[str, Optional[str]]()
-        symtab = SymbolTable()
-        with Session(
-            session_id=session_id, job_parameter_values=job_params, path_mapping_rules=rules
-        ) as session:
-            # WHEN
-            session._materialize_path_mapping(SpecificationRevision.v2023_09, env_vars, symtab)
-
-            # THEN
-            has_rules = symtab["Session.HasPathMappingRules"]
-            assert isinstance(has_rules, ExprValue)
-            assert has_rules.item() is expected_has_rules
-            assert has_rules.type == ExprType.BOOL
-            rules_file = symtab["Session.PathMappingRulesFile"]
-            assert isinstance(rules_file, ExprValue)
-            assert rules_file.type == ExprType.PATH
 
     @pytest.mark.usefixtures("caplog")  # builtin fixture
     def test_run_task(
@@ -2385,33 +2329,18 @@ class TestPathMapping_v2023_09:  # noqa: N801
             session_id="test", job_parameter_values=params, path_mapping_rules=rules
         ) as session:
             # WHEN
-            with (
-                patch(f"{path_mapping_impl_mod.__name__}.os_name", "posix"),
-                patch("openjd.sessions._session.os_name", "posix"),
-            ):
-                symtab, _library = session._symbol_table(SpecificationRevision.v2023_09, params)
+            with patch(f"{path_mapping_impl_mod.__name__}.os_name", "posix"):
+                symtab = session._symbol_table(SpecificationRevision.v2023_09, params)
 
         # THEN
-        for key in [
-            "RawParam.Path",
-            "Param.Path",
-            "RawParam.String",
-            "Param.String",
-            "Task.RawParam.Path",
-            "Task.Param.Path",
-            "Task.RawParam.String",
-            "Task.Param.String",
-        ]:
-            val = symtab[key]
-            assert isinstance(val, ExprValue), f"{key} should be ExprValue, got {type(val)}"
-        assert symtab["RawParam.Path"].to_string() == given  # type: ignore[union-attr]
-        assert symtab["Param.Path"].to_string() == expected  # type: ignore[union-attr]
-        assert symtab["RawParam.String"].to_string() == given  # type: ignore[union-attr]
-        assert symtab["Param.String"].to_string() == given  # type: ignore[union-attr]
-        assert symtab["Task.RawParam.Path"].to_string() == given  # type: ignore[union-attr]
-        assert symtab["Task.Param.Path"].to_string() == expected  # type: ignore[union-attr]
-        assert symtab["Task.RawParam.String"].to_string() == given  # type: ignore[union-attr]
-        assert symtab["Task.Param.String"].to_string() == given  # type: ignore[union-attr]
+        assert symtab["RawParam.Path"] == given
+        assert symtab["Param.Path"] == expected
+        assert symtab["RawParam.String"] == given
+        assert symtab["Param.String"] == given
+        assert symtab["Task.RawParam.Path"] == given
+        assert symtab["Task.Param.Path"] == expected
+        assert symtab["Task.RawParam.String"] == given
+        assert symtab["Task.Param.String"] == given
 
 
 SOME_ENV_VARS = {
