@@ -58,8 +58,18 @@ class LoggerAdapter(logging.LoggerAdapter):
         return msg, kwargs
 
 
-# Name the logger for the sessions module, rather than this specific file
-LOG = logging.getLogger(".".join(__name__.split(".")[:-1]))
+# The logger for the sessions module. Name is hard-coded to "openjd.sessions"
+# so that it matches the name used by the Rust-backed session runtime in
+# openjd-rs (which uses `log::...!(target: "openjd.sessions", ...)` via the
+# session_log! macro). Handlers attached to this logger therefore receive both
+# Python-side and Rust-side log records.
+#
+# Note: this file lives inside the v1 subpackage (openjd.sessions.v1._logging),
+# but the logger it exports is intentionally the v0/v1-shared "openjd.sessions",
+# not "openjd.sessions.v1". Python logging propagation flows child→parent, not
+# parent→child, so attaching handlers at "openjd.sessions.v1" would miss
+# records emitted from Rust to "openjd.sessions".
+LOG = logging.getLogger("openjd.sessions")
 """
 The logger of the openjd sessions module. The logger has the name openjd.sessions and is used 
 throughout the openjd sessions module to provide information on actions the module is taking, as
