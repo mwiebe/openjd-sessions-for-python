@@ -16,7 +16,7 @@ from ._types import (
     EnvironmentScriptModel,
     StepScriptModel,
 )
-from ._version import version
+from .._version import version
 
 # Rust-backed types
 from openjd._openjd_rs import (
