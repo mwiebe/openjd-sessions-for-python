@@ -92,23 +92,57 @@ class Session:
         )
 
     def _poll_for_completion(self):
-        """Poll the Rust session state in a background thread and fire the
-        callback when the action finishes. This bridges the Rust non-blocking
-        API with the Python callback pattern."""
+        """Watch the Rust session and fire callbacks as the action transitions.
+
+        Mirrors the v0 (Pydantic) Session's callback contract: exactly two
+        callback invocations per action — one when it starts RUNNING, and one
+        when it ends (state != RUNNING). The caller (the worker agent) holds a
+        map from action-id to current_action and mutates state on each fire;
+        double-firing the same state breaks that map and trips assertion
+        errors in the agent's `_action_updated_impl`.
+
+        We guard against:
+          1. Racing between action start and this poll loop — the Rust session
+             may already be back to READY by the time we enter the loop if the
+             subprocess ran in < 10ms. In that case we still need to report the
+             terminal status exactly once.
+          2. Stale callbacks from previous actions — each call to a run_*
+             method starts a fresh poll thread; we only observe the session's
+             current action_status.
+        """
         def _poll():
-            # Fire RUNNING callback immediately
-            if self._callback:
+            reported_running = False
+            # Phase 1: observe RUNNING at least once, then wait for transition.
+            while True:
+                state = self._rust_session.state
                 status = self._rust_session.action_status
-                if status:
+                if state == SessionState.RUNNING:
+                    if not reported_running and status is not None:
+                        reported_running = True
+                        if self._callback:
+                            self._callback(self._session_id, status)
+                    time.sleep(0.01)
+                    continue
+                # Not RUNNING anymore — action is done.
+                # If we never saw RUNNING (e.g. Rust finished before we got here),
+                # still report the RUNNING transition first, so the agent state
+                # machine sees Start → End in order.
+                if not reported_running and status is not None and self._callback:
+                    # Fabricate a RUNNING status so the agent registers the
+                    # action before we deliver its terminal status.
+                    running_status = ActionStatus(
+                        state=ActionState.RUNNING,
+                        exit_code=None,
+                        fail_message=None,
+                        progress=status.progress,
+                        status_message=status.status_message,
+                    )
+                    self._callback(self._session_id, running_status)
+                    reported_running = True
+                # Report terminal state.
+                if status is not None and self._callback:
                     self._callback(self._session_id, status)
-
-            while self._rust_session.state == SessionState.RUNNING:
-                time.sleep(0.01)
-
-            if self._callback:
-                status = self._rust_session.action_status
-                if status:
-                    self._callback(self._session_id, status)
+                return
 
         t = threading.Thread(target=_poll, daemon=True)
         t.start()
@@ -217,6 +251,27 @@ class Session:
 
     def cleanup(self) -> None:
         self._rust_session.cleanup()
+
+    def extend_path_mapping_rules(
+        self, additional: list[PathMappingRule]
+    ) -> None:
+        """Append additional path mapping rules to this session's rule set.
+
+        Forwards to the Rust Session.extend_path_mapping_rules, which re-sorts
+        rules by source-path length (longest first) so the most specific rule
+        matches first during FormatString resolution.
+
+        Consumers like the Deadline Cloud worker agent call this between
+        actions — after an assigned action delivers per-storage-profile or
+        per-attachment path mappings — to extend the rules set up at session
+        construction time.
+
+        Raises
+        ------
+        RuntimeError
+            If an action is currently in-flight. Call between actions only.
+        """
+        self._rust_session.extend_path_mapping_rules(additional)
 
     def get_enabled_extensions(self) -> list[str]:
         return []

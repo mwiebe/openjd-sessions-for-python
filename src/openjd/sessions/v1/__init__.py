@@ -25,6 +25,14 @@ from openjd._openjd_rs import (
     SessionError as SessionRuntimeError,
 )
 
+# PyO3's create_exception! macro cannot accept a dotted module path, so
+# SessionError otherwise reports `_openjd_rs.PySessionError`. Fix it up so
+# repr / pickle / traceback report its canonical user-facing home.
+SessionRuntimeError.__module__ = "openjd.sessions.v1"
+if SessionRuntimeError.__name__.startswith("Py"):
+    SessionRuntimeError.__name__ = SessionRuntimeError.__name__[2:]
+    SessionRuntimeError.__qualname__ = SessionRuntimeError.__name__
+
 __all__ = (
     "ActionState",
     "ActionStatus",
