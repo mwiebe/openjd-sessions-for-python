@@ -94,34 +94,50 @@ class Session:
     def _poll_for_completion(self):
         """Watch the Rust session and fire callbacks as the action transitions.
 
-        Mirrors the v0 (Pydantic) Session's callback contract: exactly two
-        callback invocations per action — one when it starts RUNNING, and one
-        when it ends (state != RUNNING). The caller (the worker agent) holds a
-        map from action-id to current_action and mutates state on each fire;
-        double-firing the same state breaks that map and trips assertion
-        errors in the agent's `_action_updated_impl`.
+        Callback contract:
+          - One callback when the action enters RUNNING (initial transition).
+          - Additional callbacks while RUNNING whenever any of the three
+            ActionStatus fields driven by `openjd_*` directives changes:
+            progress (`openjd_progress`), status_message (`openjd_status`),
+            or fail_message (`openjd_fail`). These keep the worker agent's
+            progressPercent/progressMessage live mid-action.
+          - One callback when the action ends (state != RUNNING).
 
         We guard against:
           1. Racing between action start and this poll loop — the Rust session
              may already be back to READY by the time we enter the loop if the
-             subprocess ran in < 10ms. In that case we still need to report the
-             terminal status exactly once.
+             subprocess ran in < 10ms. In that case we still need to report
+             the RUNNING and terminal transitions exactly once each.
           2. Stale callbacks from previous actions — each call to a run_*
              method starts a fresh poll thread; we only observe the session's
              current action_status.
+          3. Duplicate callbacks for the same observable state — the worker
+             agent's `_action_updated_impl` is keyed off action-id, not state,
+             but firing redundant identical updates wastes UpdateWorkerSchedule
+             API calls.
         """
         def _poll():
             reported_running = False
-            # Phase 1: observe RUNNING at least once, then wait for transition.
+            last_observable: Optional[tuple] = None  # (progress, status_message, fail_message)
+
+            def observable(s: ActionStatus) -> tuple:
+                return (s.progress, s.status_message, s.fail_message)
+
+            # Phase 1: observe RUNNING at least once, then watch for changes
+            # in the openjd_* directive fields and the eventual transition out.
             while True:
                 state = self._rust_session.state
                 status = self._rust_session.action_status
                 if state == SessionState.RUNNING:
-                    if not reported_running and status is not None:
-                        reported_running = True
-                        if self._callback:
+                    if status is not None and self._callback:
+                        if not reported_running:
+                            reported_running = True
+                            last_observable = observable(status)
                             self._callback(self._session_id, status)
-                    time.sleep(0.01)
+                        elif observable(status) != last_observable:
+                            last_observable = observable(status)
+                            self._callback(self._session_id, status)
+                    time.sleep(0.05)
                     continue
                 # Not RUNNING anymore — action is done.
                 # If we never saw RUNNING (e.g. Rust finished before we got here),
