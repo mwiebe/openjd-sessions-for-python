@@ -1,10 +1,27 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-"""Session user types — thin wrappers over Rust implementations."""
+"""Session user types — direct re-exports from the Rust extension.
 
-from typing import Optional
+`PosixSessionUser`, `WindowsSessionUser`, and `BadCredentialsException` are
+implemented entirely in Rust (in the `openjd._openjd_rs` extension built from
+the openjd-model-for-python crate). This module re-exports them under their
+canonical public location.
 
-from openjd._openjd_rs import PosixSessionUser
+`WindowsSessionUser` validates credentials unconditionally on construction
+via `LogonUserW`. There is no Python-level override hook (the legacy
+`_validate_username_password` static method is gone). Test harnesses that
+need to construct fake `WindowsSessionUser` instances must mock at a
+different layer — e.g. by patching the binding constructor itself, or by
+having their fixtures return a `MagicMock` spec'd against the class.
+"""
+
+from typing import Union
+
+from openjd._openjd_rs import (
+    PosixSessionUser,
+    WindowsSessionUser,
+    BadCredentialsException,
+)
 
 __all__ = (
     "PosixSessionUser",
@@ -14,18 +31,6 @@ __all__ = (
 )
 
 
-class BadCredentialsException(Exception):
-    """Exception raised for incorrect username or password."""
-    pass
-
-
-# Abstract base for type checking — both Rust types satisfy this interface
-SessionUser = PosixSessionUser  # TODO: Union[PosixSessionUser, WindowsSessionUser] when Windows bindings added
-
-
-class WindowsSessionUser:
-    """Placeholder — Windows bindings not yet exposed through Rust.
-    Will be replaced with Rust WindowsSessionUser when available."""
-
-    def __init__(self, user: str, *, password: Optional[str] = None, logon_token=None):
-        raise RuntimeError("WindowsSessionUser Rust bindings not yet available on this platform")
+# Type alias for callers that accept either user kind. Mirrors the legacy
+# `SessionUser` re-export.
+SessionUser = Union[PosixSessionUser, WindowsSessionUser]
