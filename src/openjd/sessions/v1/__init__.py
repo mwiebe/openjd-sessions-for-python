@@ -25,13 +25,10 @@ from openjd._openjd_rs import (
     SessionError as SessionRuntimeError,
 )
 
-# PyO3's create_exception! macro cannot accept a dotted module path, so
-# SessionError otherwise reports `_openjd_rs.PySessionError`. Fix it up so
-# repr / pickle / traceback report its canonical user-facing home.
-SessionRuntimeError.__module__ = "openjd.sessions.v1"
-if SessionRuntimeError.__name__.startswith("Py"):
-    SessionRuntimeError.__name__ = SessionRuntimeError.__name__[2:]
-    SessionRuntimeError.__qualname__ = SessionRuntimeError.__name__
+# Note: the `__module__` / `__name__` / `__qualname__` of the Rust-backed
+# exceptions (SessionError, BadCredentialsException) are set by the
+# `_openjd_rs` module init in Rust to their canonical user-facing values
+# (e.g. `openjd.sessions.v1.SessionError`). No Python-side fix-up needed.
 
 __all__ = (
     "ActionState",
