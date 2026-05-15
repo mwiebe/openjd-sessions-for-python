@@ -61,7 +61,7 @@ from typing import Any
 import pytest
 import yaml
 
-from openjd.model.v1 import (
+from openjd.model._v1 import (
     create_job,
     decode_job_template,
     ParameterValue,

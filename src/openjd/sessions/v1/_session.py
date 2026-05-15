@@ -14,7 +14,7 @@ from openjd._openjd_rs import (
     ActionStatus,
     PathMappingRule,
 )
-from openjd.model.v1 import (
+from openjd.model._v1 import (
     ParameterValue,
     RevisionExtensions,
     SpecificationRevision,
