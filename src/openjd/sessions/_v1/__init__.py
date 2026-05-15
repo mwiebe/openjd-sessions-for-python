@@ -28,7 +28,7 @@ from openjd._openjd_rs import (
 # Note: the `__module__` / `__name__` / `__qualname__` of the Rust-backed
 # exceptions (SessionError, BadCredentialsException) are set by the
 # `_openjd_rs` module init in Rust to their canonical user-facing values
-# (e.g. `openjd.sessions.v1.SessionError`). No Python-side fix-up needed.
+# (e.g. `openjd.sessions._v1.SessionError`). No Python-side fix-up needed.
 
 __all__ = (
     "ActionState",

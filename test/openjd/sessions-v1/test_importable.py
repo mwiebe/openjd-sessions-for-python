@@ -6,4 +6,4 @@ def test_openjd_importable():
 
 
 def test_importable():
-    import openjd.sessions.v1  # noqa: F401
+    import openjd.sessions._v1  # noqa: F401

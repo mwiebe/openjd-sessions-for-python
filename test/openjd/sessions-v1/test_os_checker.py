@@ -3,7 +3,7 @@
 import unittest
 from enum import Enum
 from unittest.mock import patch
-from openjd.sessions.v1._os_checker import is_posix, is_windows, check_os
+from openjd.sessions._v1._os_checker import is_posix, is_windows, check_os
 
 
 class OSName(str, Enum):

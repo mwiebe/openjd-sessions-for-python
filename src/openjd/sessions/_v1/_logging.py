@@ -64,10 +64,10 @@ class LoggerAdapter(logging.LoggerAdapter):
 # session_log! macro). Handlers attached to this logger therefore receive both
 # Python-side and Rust-side log records.
 #
-# Note: this file lives inside the v1 subpackage (openjd.sessions.v1._logging),
+# Note: this file lives inside the v1 subpackage (openjd.sessions._v1._logging),
 # but the logger it exports is intentionally the v0/v1-shared "openjd.sessions",
-# not "openjd.sessions.v1". Python logging propagation flows child→parent, not
-# parent→child, so attaching handlers at "openjd.sessions.v1" would miss
+# not "openjd.sessions._v1". Python logging propagation flows child→parent, not
+# parent→child, so attaching handlers at "openjd.sessions._v1" would miss
 # records emitted from Rust to "openjd.sessions".
 LOG = logging.getLogger("openjd.sessions")
 """
