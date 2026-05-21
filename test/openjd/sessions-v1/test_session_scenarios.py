@@ -62,10 +62,12 @@ import pytest
 import yaml
 
 from openjd.model._v1 import (
-    create_job,
-    decode_job_template,
     ParameterValue,
     ParameterValueType,
+    create_job,
+    decode_job_template,
+)
+from openjd.model._v1.job import (
     StepParameterSpaceIterator,
 )
 from openjd.sessions._v1 import Session, PathMappingRule
