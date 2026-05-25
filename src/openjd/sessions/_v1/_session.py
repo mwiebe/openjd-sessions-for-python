@@ -14,11 +14,8 @@ from openjd._openjd_rs import (
     ActionStatus,
     PathMappingRule,
 )
-from openjd.model._v1 import (
-    ParameterValue,
-    RevisionExtensions,
-    SpecificationRevision,
-)
+from openjd.expr import SerializedSymbolTable
+from openjd.model._v1.types import JobParameterValue, ModelProfile
 
 from ._session_user import SessionUser
 from ._types import (
@@ -32,6 +29,7 @@ from ._types import (
 # but the CLI/worker attach handlers to "openjd.sessions" (dot). We redirect by
 # adding the Python logger's handlers to the Rust logger.
 import logging as _logging
+
 _rust_logger = _logging.getLogger("openjd_sessions")
 _py_logger = _logging.getLogger("openjd.sessions")
 _rust_logger.parent = _py_logger
@@ -46,7 +44,7 @@ __all__ = [
     "SessionState",
 ]
 
-JobParameterValues = dict[str, ParameterValue]
+JobParameterValues = dict[str, JobParameterValue]
 TaskParameterSet = dict[str, Any]
 
 
@@ -73,28 +71,21 @@ class Session:
         callback: Optional[SessionCallbackType] = None,
         os_env_vars: Optional[dict[str, str]] = None,
         session_root_directory: Optional[Path] = None,
-        revision_extensions: RevisionExtensions = RevisionExtensions(
-            spec_rev=SpecificationRevision.v2023_09, supported_extensions=[]
-        ),
+        profile: Optional[ModelProfile] = None,
     ):
         self._session_id = session_id
         self._callback = callback
         self._running_reported = False
 
-        # Convert ParameterValue dicts to {name: {type: str, value: ...}} for Rust
-        rust_params = {}
-        if job_parameter_values:
-            for name, pv in job_parameter_values.items():
-                rust_params[name] = {"type": pv.type.as_str(), "value": pv.value}
-
         self._rust_session = _RustSession(
             session_id=session_id,
-            job_parameter_values=rust_params,
+            job_parameter_values=job_parameter_values or {},
             path_mapping_rules=path_mapping_rules,
             retain_working_dir=retain_working_dir,
             os_env_vars=os_env_vars,
             session_root_directory=str(session_root_directory) if session_root_directory else None,
             user=user,
+            profile=profile,
         )
 
     def _fire_initial_running_callback(self) -> None:
@@ -252,9 +243,7 @@ class Session:
     def environments_entered(self) -> tuple[EnvironmentIdentifier, ...]:
         return tuple(self._rust_session.environments_entered)
 
-    def cancel_action(
-        self, *, time_limit=None, mark_action_failed=False
-    ) -> None:
+    def cancel_action(self, *, time_limit=None, mark_action_failed=False) -> None:
         seconds = time_limit.total_seconds() if time_limit else None
         self._rust_session.cancel_action(seconds, mark_action_failed)
 
@@ -264,11 +253,20 @@ class Session:
         environment: EnvironmentModel,
         identifier: Optional[EnvironmentIdentifier] = None,
         os_env_vars: Optional[dict[str, str]] = None,
-        resolved_bindings: Optional[list[dict[str, Any]]] = None,
+        resolved_symtab: Optional[SerializedSymbolTable] = None,
     ) -> EnvironmentIdentifier:
+        # ``resolved_symtab`` is the step-scope symbol table generated
+        # by ``create_job`` (available as ``Step.resolved_symtab``).
+        # It contains ``Param.*``, ``RawParam.*``, ``Job.Name``,
+        # ``Step.Name``, and the step-level let-binding values. Without
+        # it, the runner sees an empty symtab and any ``{{ Param.X }}``
+        # interpolation or expression in the environment script will
+        # fail with ``Undefined variable``. ``None`` is fine when the
+        # environment script doesn't reference any of those names.
         eid = self._rust_session.enter_environment(
             environment=environment,
             identifier=identifier,
+            resolved_symtab=resolved_symtab,
             os_env_vars=os_env_vars,
         )
         self._fire_initial_running_callback()
@@ -281,10 +279,12 @@ class Session:
         identifier: EnvironmentIdentifier,
         os_env_vars: Optional[dict[str, str]] = None,
         keep_session_running: bool = True,
-        resolved_bindings: Optional[list[dict[str, Any]]] = None,
+        resolved_symtab: Optional[SerializedSymbolTable] = None,
     ) -> None:
+        # See ``enter_environment`` for ``resolved_symtab`` semantics.
         self._rust_session.exit_environment(
             identifier=identifier,
+            resolved_symtab=resolved_symtab,
             keep_session_running=keep_session_running,
             os_env_vars=os_env_vars,
         )
@@ -298,20 +298,26 @@ class Session:
         task_parameter_values: TaskParameterSet,
         os_env_vars: Optional[dict[str, str]] = None,
         log_task_banner: bool = True,
-        resolved_bindings: Optional[list[dict[str, Any]]] = None,
+        resolved_symtab: Optional[SerializedSymbolTable] = None,
     ) -> None:
-        rust_task_params = None
-        if task_parameter_values:
-            rust_task_params = {}
-            for name, pv in task_parameter_values.items():
-                if hasattr(pv, 'type') and hasattr(pv, 'value'):
-                    rust_task_params[name] = {"type": pv.type.as_str(), "value": pv.value}
-                else:
-                    rust_task_params[name] = {"type": "STRING", "value": str(pv)}
-
+        # ``resolved_symtab`` is the step-scope symbol table generated
+        # by ``create_job`` (available as ``Step.resolved_symtab``).
+        # It contains ``Param.*``, ``RawParam.*``, ``Job.Name``,
+        # ``Step.Name``, and the step-level let-binding values. The
+        # runner layers ``Session.*`` and ``Task.*`` values on top to
+        # evaluate the script-level let bindings and the action
+        # arguments. ``None`` is fine when the script has no let
+        # bindings and no expression interpolation that depends on
+        # step-scope state.
+        #
+        # ``log_task_banner`` is accepted for API compatibility but
+        # currently has no effect — the Rust runner always emits the
+        # task banner. TODO: plumb through if/when the Rust API
+        # supports suppressing it.
         self._rust_session.run_task(
             step_script=step_script,
-            task_parameter_values=rust_task_params,
+            task_parameter_values=task_parameter_values,
+            resolved_symtab=resolved_symtab,
             os_env_vars=os_env_vars,
         )
         self._fire_initial_running_callback()
@@ -341,9 +347,18 @@ class Session:
     def cleanup(self) -> None:
         self._rust_session.cleanup()
 
-    def extend_path_mapping_rules(
-        self, additional: list[PathMappingRule]
+    def __enter__(self) -> "Session":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[Any],
     ) -> None:
+        self.cleanup()
+
+    def extend_path_mapping_rules(self, additional: list[PathMappingRule]) -> None:
         """Append additional path mapping rules to this session's rule set.
 
         Forwards to the Rust Session.extend_path_mapping_rules, which re-sorts

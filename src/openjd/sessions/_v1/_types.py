@@ -20,3 +20,14 @@ EnvironmentScriptModel = EnvironmentScript_2023_09
 EmbeddedFileType = EmbeddedFileText_2023_09
 EmbeddedFilesListType = list
 ActionModel = Action_2023_09
+
+__all__ = (
+    "ActionModel",
+    "ActionState",
+    "EmbeddedFileType",
+    "EmbeddedFilesListType",
+    "EnvironmentIdentifier",
+    "EnvironmentModel",
+    "EnvironmentScriptModel",
+    "StepScriptModel",
+)

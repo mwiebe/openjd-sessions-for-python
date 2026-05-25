@@ -59,18 +59,20 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from openjd.model._v1 import (
-    ParameterValue,
-    ParameterValueType,
     create_job,
     decode_job_template,
+)
+from openjd.model._v1.types import (
+    JobParameterType,
+    JobParameterValue,
 )
 from openjd.model._v1.job import (
     StepParameterSpaceIterator,
 )
-from openjd.sessions._v1 import Session, PathMappingRule
+from openjd.sessions._v1 import Session, PathMappingRule, SessionState
 
 
 SCENARIOS_DIR = Path(__file__).parent / "scenarios"
@@ -103,20 +105,35 @@ def parse_path_mapping_rules(rules_data: list[dict]) -> list[PathMappingRule]:
     return [PathMappingRule.from_dict(r) for r in rules_data]
 
 
-def build_parameter_values(params: dict[str, Any], job_template: Any) -> dict[str, ParameterValue]:
-    """Build ParameterValue dict from scenario parameters."""
-    # Get type info from template's parameter definitions
-    type_map = {}
+def build_parameter_values(
+    params: dict[str, Any], job_template: Any
+) -> dict[str, JobParameterValue]:
+    """Build JobParameterValue dict from scenario parameters."""
+    # Get type info from template's parameter definitions. The v1
+    # binding exposes `JobParameterType` as a pyclass enum without
+    # a value-from-string constructor; pass the variant directly.
+    # `.name` is the identifier (e.g. "STRING", "LIST_PATH"),
+    # `.as_str()` is the spec form (e.g. "STRING", "LIST[PATH]")
+    # — different shapes, so we hold onto the variant itself.
+    type_map: dict[str, JobParameterType] = {}
     for param_def in getattr(job_template, "parameterDefinitions", []) or []:
-        type_map[param_def.name] = param_def.type.value
+        type_map[param_def.name] = param_def.type
 
     result = {}
     for name, value in params.items():
-        param_type_str = type_map.get(name, "STRING")
-        # Map template type to ParameterValueType
-        ptype = ParameterValueType(param_type_str.upper())
-        result[name] = ParameterValue(type=ptype, value=value)
+        ptype = type_map.get(name, JobParameterType.STRING)
+        result[name] = JobParameterValue(type=ptype, value=value)
     return result
+
+
+# Session states the runner waits to settle into between actions.
+# In the v1 binding `SessionState` is a pyclass enum (no `.value`
+# attribute); compare against the enum variants directly.
+_QUIESCENT_STATES = {
+    SessionState.READY,
+    SessionState.ENDED,
+    SessionState.READY_ENDING,
+}
 
 
 class TestSessionScenarios:
@@ -182,7 +199,7 @@ class TestSessionScenarios:
             for env in job.jobEnvironments or []:
                 env_id = session.enter_environment(environment=env)
                 job_env_ids.append(env_id)
-                while session.state.value not in ("ready", "ended", "ready_ending"):
+                while session.state not in _QUIESCENT_STATES:
                     import time
 
                     time.sleep(0.01)
@@ -191,10 +208,10 @@ class TestSessionScenarios:
             for env in step.stepEnvironments or []:
                 env_id = session.enter_environment(
                     environment=env,
-                    resolved_bindings=step.resolvedBindings,
+                    resolved_symtab=step.resolved_symtab,
                 )
                 step_env_ids.append(env_id)
-                while session.state.value not in ("ready", "ended", "ready_ending"):
+                while session.state not in _QUIESCENT_STATES:
                     import time
 
                     time.sleep(0.01)
@@ -204,9 +221,9 @@ class TestSessionScenarios:
                 session.run_task(
                     step_script=step_script,
                     task_parameter_values=task_params,
-                    resolved_bindings=step.resolvedBindings,
+                    resolved_symtab=step.resolved_symtab,
                 )
-                while session.state.value not in ("ready", "ended", "ready_ending"):
+                while session.state not in _QUIESCENT_STATES:
                     import time
 
                     time.sleep(0.01)
@@ -215,9 +232,9 @@ class TestSessionScenarios:
             for env_id in reversed(step_env_ids):
                 session.exit_environment(
                     identifier=env_id,
-                    resolved_bindings=step.resolvedBindings,
+                    resolved_symtab=step.resolved_symtab,
                 )
-                while session.state.value not in ("ready", "ended", "ready_ending"):
+                while session.state not in _QUIESCENT_STATES:
                     import time
 
                     time.sleep(0.01)
@@ -225,7 +242,7 @@ class TestSessionScenarios:
             # Exit job environments (reverse order)
             for env_id in reversed(job_env_ids):
                 session.exit_environment(identifier=env_id)
-                while session.state.value not in ("ready", "ended", "ready_ending"):
+                while session.state not in _QUIESCENT_STATES:
                     import time
 
                     time.sleep(0.01)

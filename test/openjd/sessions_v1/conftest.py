@@ -1,10 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-import os
 import sys
 import pytest
-
-from openjd.sessions._v1._os_checker import is_posix, is_windows
 
 
 def pytest_collection_modifyitems(config, items):
