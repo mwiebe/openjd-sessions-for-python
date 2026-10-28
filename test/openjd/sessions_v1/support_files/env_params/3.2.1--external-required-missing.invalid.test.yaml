@@ -1,0 +1,20 @@
+# Copied unchanged (below this header) from openjd-specifications branch
+# rfc-env-params @ 80a2018, conformance-tests/2023-09/ENV_PARAMS/jobs/3.2.1--external-required-missing.invalid.test.yaml.
+# RFC 0010 / Template Schemas §3.2.1 item 2: an entry with required: true (the
+# default) naming an Environment that nothing attaches is rejected at job creation.
+template:
+  specificationVersion: jobtemplate-2023-09
+  extensions: [ENV_PARAMS, EXPR]
+  name: ExternalRequiredMissing
+  steps:
+  - name: A
+    dependencies:
+    - environment: Conda
+      parameters:
+        Packages: ffmpeg=7
+    script:
+      actions:
+        onRun:
+          command: echo
+          args: [TASK, A]
+runOn: [posix, windows]
