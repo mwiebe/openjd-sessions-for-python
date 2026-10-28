@@ -1,0 +1,46 @@
+# Copied unchanged (below this header) from openjd-specifications branch
+# rfc-env-params @ 80a2018, conformance-tests/2023-09/ENV_PARAMS/jobs/3.2--enable-if-false-not-entered.test.yaml.
+# RFC 0010 / Template Schemas §3.2 items 2 and 5: an entry whose enableIf
+# resolves to false is disabled and requests nothing, so its ON_REQUEST
+# Environment is not entered.
+template:
+  specificationVersion: jobtemplate-2023-09
+  extensions: [ENV_PARAMS, EXPR]
+  name: EnableIfFalseNotEntered
+  parameterDefinitions:
+  - name: Mode
+    type: STRING
+    allowedValues: ["on", "off"]
+  jobEnvironments:
+  - name: Lic
+    activation: ON_REQUEST
+    envParameterDefinitions:
+    - name: Product
+      type: STRING
+      default: pdefault
+    script:
+      actions:
+        onEnter:
+          command: echo
+          args: [ENTER, Lic, "Product={{Env.Param.Product}}"]
+  steps:
+  - name: A
+    dependencies:
+    - environment: Lic
+      enableIf: "Param.Mode == 'on'"
+      parameters:
+        Product: arnold
+    script:
+      actions:
+        onRun:
+          command: echo
+          args: [TASK, A]
+parameters:
+  Mode: "off"
+runOn: [posix, windows]
+expected:
+  output:
+  - TASK A
+  forbidden:
+  - ENTER Lic Product=arnold
+  - ENTER Lic Product=pdefault

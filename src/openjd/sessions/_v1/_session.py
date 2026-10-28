@@ -15,6 +15,7 @@ from openjd._openjd_rs import (
     PathMappingRule,
 )
 from openjd.expr import SerializedSymbolTable
+from openjd.model._v1.job import EnvironmentParameterValues
 from openjd.model._v1.types import JobParameterValue, ModelProfile
 
 from ._session_user import SessionUser
@@ -254,6 +255,7 @@ class Session:
         identifier: Optional[EnvironmentIdentifier] = None,
         os_env_vars: Optional[dict[str, str]] = None,
         resolved_symtab: Optional[SerializedSymbolTable] = None,
+        parameters: Optional[EnvironmentParameterValues] = None,
     ) -> EnvironmentIdentifier:
         # ``resolved_symtab`` is the step-scope symbol table generated
         # by ``create_job`` (available as ``Step.resolved_symtab``).
@@ -263,15 +265,29 @@ class Session:
         # interpolation or expression in the environment script will
         # fail with ``Undefined variable``. ``None`` is fine when the
         # environment script doesn't reference any of those names.
+        #
+        # ``parameters`` (ENV_PARAMS) is the Step's
+        # ``environment_parameters`` entry for this Environment. Its values
+        # are bound as ``Env.Param.*`` / ``Env.RawParam.*`` for this
+        # Environment only and reused by its ``onExit``. A mismatched
+        # Environment name raises ``SessionError`` before anything runs.
         eid = self._rust_session.enter_environment(
             environment=environment,
             identifier=identifier,
             resolved_symtab=resolved_symtab,
             os_env_vars=os_env_vars,
+            parameters=parameters,
         )
         self._fire_initial_running_callback()
         self._poll_for_completion()
         return eid
+
+    def environment_parameters(
+        self, identifier: EnvironmentIdentifier
+    ) -> Optional[EnvironmentParameterValues]:
+        """ENV_PARAMS: the values the entered Environment ``identifier`` was
+        entered with, or ``None`` (not entered, or entered without values)."""
+        return self._rust_session.environment_parameters(identifier)
 
     def exit_environment(
         self,
