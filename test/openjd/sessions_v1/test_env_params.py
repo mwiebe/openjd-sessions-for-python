@@ -215,6 +215,16 @@ class TestEnterEnvironmentWithParameters:
             _wait(session)
             assert session.action_status is not None
             assert session.action_status.state == ActionState.SUCCESS
+            # Like the worker agent, wait for the action's terminal callback
+            # before starting the next one: each action has its own poll
+            # thread, and an earlier one may otherwise deliver late.
+            deadline = time.monotonic() + 5
+            while (not statuses or statuses[-1].state != ActionState.SUCCESS) and (
+                time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
+            assert statuses[-1].state == ActionState.SUCCESS
+            del statuses[:]
 
             session.enter_environment(environment=env, parameters=dotted)
             _wait(session)
@@ -232,7 +242,53 @@ class TestEnterEnvironmentWithParameters:
             time.monotonic() < deadline
         ):
             time.sleep(0.01)
-        assert statuses[-1].state == ActionState.FAILED
+        assert [st.state for st in statuses] == [ActionState.RUNNING, ActionState.FAILED]
+        assert statuses[-1].fail_message == status.fail_message
+
+    def test_unbindable_table_as_first_action(self, job: Any, tmp_path: Path) -> None:
+        # No earlier action: the status must still become FAILED, not stay None.
+        env = job.job_environments[0]
+        untyped = EnvironmentParameterValues(
+            environment="Tool",
+            values=SerializedSymbolTable.from_json_str('[{"name":"Flavor","value":"x"}]'),
+        )
+        with Session(
+            session_id="s", job_parameter_values={}, session_root_directory=tmp_path
+        ) as session:
+            assert session.action_status is None
+            session.enter_environment(environment=env, parameters=untyped)
+            _wait(session)
+            status = session.action_status
+            assert status is not None
+            assert status.state == ActionState.FAILED
+            assert status.fail_message == (
+                "Environment 'Tool': invalid Environment parameter values: parameter 'Flavor' "
+                "has no string 'type'."
+            )
+
+    def test_terminal_state_never_shows_a_stale_status(self, job: Any, tmp_path: Path) -> None:
+        # Repeats the refused enter many times and reads state and status the
+        # way the Python poller does (state first, then status), checking the
+        # status is never the previous action's SUCCESS once the state is
+        # terminal.
+        env = job.job_environments[0]
+        dotted = EnvironmentParameterValues(
+            environment="Tool",
+            values=SerializedSymbolTable.from_json_str(
+                '[{"name":"Env.Param.Flavor","type":"string","value":"x"}]'
+            ),
+        )
+        with Session(
+            session_id="s", job_parameter_values={}, session_root_directory=tmp_path
+        ) as session:
+            for _ in range(50):
+                session.run_subprocess(command="true")
+                _wait(session)
+                session.enter_environment(environment=env, parameters=dotted)
+                while session.state not in _QUIESCENT:
+                    pass
+                status = session.action_status
+                assert status is not None and status.state == ActionState.FAILED
 
     def test_without_parameters_env_param_is_undefined(self, job: Any, tmp_path: Path) -> None:
         env = job.job_environments[0]
