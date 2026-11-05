@@ -383,9 +383,10 @@ class Session:
         """Append additional path mapping rules to this session's rule set.
 
         Forwards to the Rust Session.extend_path_mapping_rules. The rules
-        keep their order: the rule with the longest matching ``source_path``
-        applies, and between rules for the same location the one given last
-        wins, so an added rule takes precedence over an existing one.
+        keep their order. The matching rule whose ``source_path`` has the
+        most path names applies, and between rules for the same location
+        the one given last wins, so an added rule takes precedence over an
+        existing one.
 
         Consumers like the Deadline Cloud worker agent call this between
         actions — after an assigned action delivers per-storage-profile or
@@ -398,8 +399,10 @@ class Session:
             If an action is currently in-flight. Call between actions only.
         SessionRuntimeError
             If an added rule is invalid (a ``source_path`` that is not
-            absolute for its format, or a path longer than 32 KiB). The
-            session's rules are left unchanged.
+            absolute for its format, or a ``source_path`` or
+            ``destination_path`` longer than 32 KiB). The session's rules
+            are left unchanged. The message counts the existing rules first:
+            the first added rule is ``path mapping rule <len(existing)>``.
         """
         self._rust_session.extend_path_mapping_rules(additional)
 

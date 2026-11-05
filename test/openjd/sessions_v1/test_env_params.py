@@ -25,6 +25,7 @@ import yaml  # type: ignore[import-untyped]
 
 from openjd.expr import SerializedSymbolTable
 from openjd.model._v1 import create_job, decode_job_template
+from openjd.model._v1.errors import ModelValidationError
 from openjd.sessions._v1 import (
     ActionState,
     EnvironmentParameterValues,
@@ -239,16 +240,107 @@ class TestEnterEnvironmentWithParameters:
             )
             assert session.state == SessionState.READY
             assert session.environments_entered == ()
-            # Wait for the terminal callback inside the Session: the poll
-            # thread reads the status every 50 ms, and once the Session ends
-            # its status is the last action that ran, the earlier SUCCESS.
+        # The Session may end before the poll thread (50 ms period) reads the
+        # terminal status; the refused action's FAILED must survive that.
+        deadline = time.monotonic() + 5
+        while (not statuses or statuses[-1].state != ActionState.FAILED) and (
+            time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert [st.state for st in statuses] == [ActionState.RUNNING, ActionState.FAILED]
+        assert statuses[-1].fail_message == status.fail_message
+
+    @pytest.mark.parametrize("first", [True, False], ids=["first-action", "after-success"])
+    def test_refused_status_survives_cleanup_and_cancel(
+        self, job: Any, tmp_path: Path, first: bool
+    ) -> None:
+        # The Rust session never records a refused action, so its FAILED
+        # status lives only in the binding; a later refresh must keep it.
+        env = job.job_environments[0]
+        dotted = EnvironmentParameterValues(
+            environment="Tool",
+            values=SerializedSymbolTable.from_json_str(
+                '[{"name":"Env.Param.Flavor","type":"string","value":"x"}]'
+            ),
+        )
+        session = Session(session_id="s", job_parameter_values={}, session_root_directory=tmp_path)
+        if not first:
+            session.run_subprocess(command="true")
+            _wait(session)
+        session.enter_environment(environment=env, parameters=dotted)
+        _wait(session)
+        with pytest.raises(SessionRuntimeError) as exc:
+            session.cancel_action()
+        assert str(exc.value) == "Session must be in RUNNING state, current: READY"
+        status = session.action_status
+        assert status is not None and status.state == ActionState.FAILED
+        session.cleanup()
+        assert session.state == SessionState.ENDED
+        status = session.action_status
+        assert status is not None and status.state == ActionState.FAILED
+        assert status.fail_message == (
+            "Environment 'Tool': invalid Environment parameter values: 'Env.Param.Flavor' is not a "
+            "parameter name; each entry must be keyed by the bare name."
+        )
+
+    def test_a_later_action_replaces_the_refused_status(self, job: Any, tmp_path: Path) -> None:
+        env = job.job_environments[0]
+        dotted = EnvironmentParameterValues(
+            environment="Tool",
+            values=SerializedSymbolTable.from_json_str(
+                '[{"name":"Env.Param.Flavor","type":"string","value":"x"}]'
+            ),
+        )
+        with Session(
+            session_id="s", job_parameter_values={}, session_root_directory=tmp_path
+        ) as session:
+            session.enter_environment(environment=env, parameters=dotted)
+            _wait(session)
+            assert session.action_status is not None
+            assert session.action_status.state == ActionState.FAILED
+            session.run_subprocess(command="true")
+            _wait(session)
+            assert session.action_status is not None
+            assert session.action_status.state == ActionState.SUCCESS
+            session.cleanup()
+            assert session.action_status is not None
+            assert session.action_status.state == ActionState.SUCCESS
+
+    def test_refused_then_cleanup_reports_failed(self, job: Any, tmp_path: Path) -> None:
+        # A refused enter followed at once by cleanup: the poll thread may
+        # read the status only after the Session has ended.
+        env = job.job_environments[0]
+        dotted = EnvironmentParameterValues(
+            environment="Tool",
+            values=SerializedSymbolTable.from_json_str(
+                '[{"name":"Env.Param.Flavor","type":"string","value":"x"}]'
+            ),
+        )
+        for i in range(20):
+            statuses: list[Any] = []
+            root = tmp_path / str(i)
+            root.mkdir()
+            session = Session(
+                session_id="s",
+                job_parameter_values={},
+                session_root_directory=root,
+                callback=lambda _sid, st: statuses.append(st),
+            )
+            session.run_subprocess(command="true")
+            _wait(session)
             deadline = time.monotonic() + 5
-            while (not statuses or statuses[-1].state != ActionState.FAILED) and (
+            while (not statuses or statuses[-1].state != ActionState.SUCCESS) and (
                 time.monotonic() < deadline
             ):
                 time.sleep(0.01)
-        assert [st.state for st in statuses] == [ActionState.RUNNING, ActionState.FAILED]
-        assert statuses[-1].fail_message == status.fail_message
+            del statuses[:]
+            session.enter_environment(environment=env, parameters=dotted)
+            _wait(session)
+            session.cleanup()
+            deadline = time.monotonic() + 5
+            while len(statuses) < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert [st.state for st in statuses] == [ActionState.RUNNING, ActionState.FAILED]
 
     def test_unbindable_table_as_first_action(self, job: Any, tmp_path: Path) -> None:
         # No earlier action: the status must still become FAILED, not stay None.
@@ -345,6 +437,9 @@ class TestSupersededEnvironment:
     def test_never_entered_or_exited(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
+        # The Session gets no exclusiveGroup information: it enters what it is
+        # given. This checks the caller's rule (Step.enters_environment, as the
+        # worker agent uses it) together with the Session's enter and exit.
         caplog.set_level(logging.INFO)
         jt = decode_job_template(
             template=_GROUP_TEMPLATE, supported_extensions=["ENV_PARAMS", "EXPR"]
@@ -386,9 +481,17 @@ class TestSupersededEnvironment:
         jt = decode_job_template(
             template=_GROUP_TEMPLATE, supported_extensions=["ENV_PARAMS", "EXPR"]
         )
-        with pytest.raises(Exception) as exc:
+        with pytest.raises(ModelValidationError) as exc:
             create_job(job_template=jt, job_parameter_values={"UseA": "false"})
-        assert "missing: 'Seats' of Environment 'B'." in str(exc.value)
+        assert str(exc.value) == (
+            "1 validation error for JobTemplate\n"
+            "steps[0]:\n"
+            "\tmust supply, in an 'environment:' dependency, every parameter without a default "
+            "of each Environment its Sessions enter (every jobEnvironments entry with activation "
+            "ALWAYS, each one with activation BY_DEFAULT that the Step does not decline, and each "
+            "one with activation ON_REQUEST that the Step requests; Template Schemas §3.2 "
+            "constraint 7); missing: 'Seats' of Environment 'B'."
+        )
 
 
 # ── Path mapping rules are validated (openjd-sessions 0.8.2) ──
@@ -424,6 +527,45 @@ class TestInvalidPathMappingRules:
         del exc
         gc.collect()
         assert unraisable == []
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX echo and paths")
+    def test_extend_adds_rules_that_take_precedence(
+        self, job: Any, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from openjd.sessions._v1 import PathMappingRule
+
+        caplog.set_level(logging.INFO)
+
+        def rule(dst: str) -> Any:
+            return PathMappingRule.from_dict(
+                {"source_path_format": "POSIX", "source_path": "/src", "destination_path": dst}
+            )
+
+        step = job.steps[0]
+        env = job.job_environments[0]
+        with Session(
+            session_id="s",
+            job_parameter_values={},
+            path_mapping_rules=[rule("/first")],
+            session_root_directory=tmp_path,
+        ) as session:
+            # A rejected extension leaves the rules unchanged.
+            with pytest.raises(SessionRuntimeError):
+                session.extend_path_mapping_rules(
+                    [rule("/never"), PathMappingRule.from_dict(self._BAD)]
+                )
+            session.extend_path_mapping_rules([rule("/added"), rule("/last")])
+            session.enter_environment(
+                environment=env,
+                resolved_symtab=env.resolved_symtab,
+                parameters=step.environment_parameters_for("Tool"),
+            )
+            _wait(session)
+            assert session.action_status is not None
+            assert session.action_status.state == ActionState.SUCCESS
+        lines = [r.getMessage() for r in caplog.records]
+        # The last rule given for /src wins.
+        assert "ENTER red /last/data" in lines
 
     def test_extend_rejects_an_invalid_rule(self, tmp_path: Path) -> None:
         from openjd.sessions._v1 import PathMappingRule
