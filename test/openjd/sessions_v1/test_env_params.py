@@ -545,20 +545,63 @@ class TestRefusedActions:
             assert self._terminal(statuses).fail_message == status.fail_message
             assert [st.state for st in statuses] == [ActionState.RUNNING, ActionState.FAILED]
 
-    def test_exit_of_an_unknown_environment(self, tmp_path: Path) -> None:
-        session, statuses = self._collect(tmp_path)
+    @pytest.mark.parametrize("first", [True, False], ids=["first-action", "after-success"])
+    def test_exit_of_an_unknown_environment(self, tmp_path: Path, first: bool) -> None:
+        session, statuses = self._collect(tmp_path, long_path=False)
         with session:
-            session.run_subprocess(command="true")
-            _wait(session)
-            assert self._terminal(statuses).state == ActionState.SUCCESS
-            del statuses[:]
+            if not first:
+                session.run_subprocess(command="true")
+                _wait(session)
+                assert self._terminal(statuses).state == ActionState.SUCCESS
+                del statuses[:]
             session.exit_environment(identifier="nope")
             _wait(session)
             status = session.action_status
             assert status is not None
             assert status.state == ActionState.FAILED
             assert status.fail_message == "Unknown environment identifier: nope"
+            assert self._terminal(statuses).fail_message == status.fail_message
             assert [st.state for st in statuses] == [ActionState.RUNNING, ActionState.FAILED]
+
+    def test_failed_onexit_after_a_failed_task_keeps_its_exit_code(self, tmp_path: Path) -> None:
+        # After a failed action the Session is READY_ENDING, and an onExit
+        # that then runs and fails must keep its own status (exit code 1),
+        # not be reported as a refusal.
+        jt = decode_job_template(
+            template={
+                "specificationVersion": "jobtemplate-2023-09",
+                "name": "J",
+                "jobEnvironments": [
+                    {"name": "E", "script": {"actions": {"onExit": {"command": "false"}}}}
+                ],
+                "steps": [{"name": "S", "script": {"actions": {"onRun": {"command": "true"}}}}],
+            }
+        )
+        env = create_job(job_template=jt, job_parameter_values={}).job_environments[0]
+        session, statuses = self._collect(tmp_path, long_path=False)
+        with session:
+            eid = session.enter_environment(environment=env, resolved_symtab=env.resolved_symtab)
+            _wait(session)
+            session.run_subprocess(command="false")
+            _wait(session)
+            assert session.state == SessionState.READY_ENDING
+            assert self._terminal(statuses).state == ActionState.FAILED
+            del statuses[:]
+            session.exit_environment(identifier=eid, resolved_symtab=env.resolved_symtab)
+            _wait(session)
+            status = session.action_status
+            assert status is not None
+            assert (status.state, status.exit_code, status.fail_message) == (
+                ActionState.FAILED,
+                1,
+                None,
+            )
+            terminal = self._terminal(statuses)
+            assert (terminal.state, terminal.exit_code, terminal.fail_message) == (
+                ActionState.FAILED,
+                1,
+                None,
+            )
 
 
 # ── Dropping a Session cleans it up ──
