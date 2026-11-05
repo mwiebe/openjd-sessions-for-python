@@ -11,9 +11,11 @@ ENV_PARAMS job test of that suite too.
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -237,11 +239,14 @@ class TestEnterEnvironmentWithParameters:
             )
             assert session.state == SessionState.READY
             assert session.environments_entered == ()
-        deadline = time.monotonic() + 5
-        while (not statuses or statuses[-1].state != ActionState.FAILED) and (
-            time.monotonic() < deadline
-        ):
-            time.sleep(0.01)
+            # Wait for the terminal callback inside the Session: the poll
+            # thread reads the status every 50 ms, and once the Session ends
+            # its status is the last action that ran, the earlier SUCCESS.
+            deadline = time.monotonic() + 5
+            while (not statuses or statuses[-1].state != ActionState.FAILED) and (
+                time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
         assert [st.state for st in statuses] == [ActionState.RUNNING, ActionState.FAILED]
         assert statuses[-1].fail_message == status.fail_message
 
@@ -301,3 +306,134 @@ class TestEnterEnvironmentWithParameters:
             assert status is not None
             assert status.state == ActionState.FAILED
             assert session.environment_parameters(eid) is None
+
+
+# ── exclusiveGroup: a superseded Environment is never entered or exited ──
+
+_GROUP_TEMPLATE: dict[str, Any] = {
+    "specificationVersion": "jobtemplate-2023-09",
+    "extensions": ["ENV_PARAMS", "EXPR"],
+    "name": "GroupJob",
+    "jobEnvironments": [
+        {
+            "name": name,
+            "exclusiveGroup": "G",
+            **extra,
+            "script": {
+                "actions": {
+                    "onEnter": {"command": "echo", "args": ["ENTER", name]},
+                    "onExit": {"command": "echo", "args": ["EXIT", name]},
+                }
+            },
+        }
+        for name, extra in (
+            ("A", {"enableIf": "Param.UseA"}),
+            # B's Seats has no default and no Step supplies it: B is only
+            # valid where A supersedes it.
+            ("B", {"envParameterDefinitions": [{"name": "Seats", "type": "INT"}]}),
+        )
+    ],
+    "parameterDefinitions": [{"name": "UseA", "type": "BOOL", "default": True}],
+    "steps": [
+        {"name": "S", "script": {"actions": {"onRun": {"command": "echo", "args": ["TASK"]}}}}
+    ],
+}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX echo")
+class TestSupersededEnvironment:
+    def test_never_entered_or_exited(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.INFO)
+        jt = decode_job_template(
+            template=_GROUP_TEMPLATE, supported_extensions=["ENV_PARAMS", "EXPR"]
+        )
+        job = create_job(job_template=jt, job_parameter_values={})
+        step = job.steps[0]
+        # The worker's rule: enter exactly the Job Environments the Step's
+        # Sessions enter, in Job order, and exit those in reverse.
+        entering = [e for e in job.job_environments if step.enters_environment(e.name)]
+        assert [e.name for e in entering] == ["A"]
+        assert step.environment_parameters_for("B") is None
+        with Session(
+            session_id="s", job_parameter_values={}, session_root_directory=tmp_path
+        ) as session:
+            ids = []
+            for env in entering:
+                ids.append(
+                    session.enter_environment(
+                        environment=env,
+                        resolved_symtab=env.resolved_symtab,
+                        parameters=step.environment_parameters_for(env.name),
+                    )
+                )
+                _wait(session)
+                assert session.action_status is not None
+                assert session.action_status.state == ActionState.SUCCESS
+            assert list(session.environments_entered) == ids
+            for env_id, env in reversed(list(zip(ids, entering))):
+                session.exit_environment(identifier=env_id, resolved_symtab=env.resolved_symtab)
+                _wait(session)
+                assert session.action_status is not None
+                assert session.action_status.state == ActionState.SUCCESS
+        lines = [r.getMessage() for r in caplog.records]
+        assert "ENTER A" in lines and "EXIT A" in lines
+        assert not any(" B" in line and line.split()[0] in ("ENTER", "EXIT") for line in lines)
+
+    def test_falls_through_when_the_first_is_disabled(self) -> None:
+        # With A disabled, B is entered, and its missing Seats is an error.
+        jt = decode_job_template(
+            template=_GROUP_TEMPLATE, supported_extensions=["ENV_PARAMS", "EXPR"]
+        )
+        with pytest.raises(Exception) as exc:
+            create_job(job_template=jt, job_parameter_values={"UseA": "false"})
+        assert "missing: 'Seats' of Environment 'B'." in str(exc.value)
+
+
+# ── Path mapping rules are validated (openjd-sessions 0.8.2) ──
+
+
+class TestInvalidPathMappingRules:
+    _BAD = {"source_path_format": "POSIX", "source_path": "rel", "destination_path": "/d"}
+    _OK = {"source_path_format": "POSIX", "source_path": "/s", "destination_path": "/d"}
+    _MESSAGE = (
+        "Invalid path mapping rules: path mapping rule 1: source_path 'rel' must be an absolute "
+        "POSIX path, starting with '/'"
+    )
+
+    def test_session_constructor_rejects_an_invalid_rule(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from openjd.sessions._v1 import PathMappingRule
+
+        unraisable: list[Any] = []
+        monkeypatch.setattr(sys, "unraisablehook", unraisable.append)
+        rules = [PathMappingRule.from_dict(self._OK), PathMappingRule.from_dict(self._BAD)]
+        with pytest.raises(SessionRuntimeError) as exc:
+            Session(
+                session_id="s",
+                job_parameter_values={},
+                path_mapping_rules=rules,
+                session_root_directory=tmp_path,
+            )
+        assert str(exc.value) == self._MESSAGE
+        # No session directory is created for a rejected Session.
+        assert list(tmp_path.iterdir()) == []
+        # Freeing the half-built Session must not raise from __del__.
+        del exc
+        gc.collect()
+        assert unraisable == []
+
+    def test_extend_rejects_an_invalid_rule(self, tmp_path: Path) -> None:
+        from openjd.sessions._v1 import PathMappingRule
+
+        with Session(
+            session_id="s",
+            job_parameter_values={},
+            path_mapping_rules=[PathMappingRule.from_dict(self._OK)],
+            session_root_directory=tmp_path,
+        ) as session:
+            with pytest.raises(SessionRuntimeError) as exc:
+                session.extend_path_mapping_rules([PathMappingRule.from_dict(self._BAD)])
+            assert str(exc.value) == self._MESSAGE

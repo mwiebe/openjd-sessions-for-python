@@ -1,5 +1,5 @@
 # Copied unchanged (below this header) from openjd-specifications branch
-# rfc-env-params @ 80a2018, conformance-tests/2023-09/ENV_PARAMS/jobs/4.5--value-reaches-on-exit-args.test.yaml.
+# rfc-env-params @ 87be017, conformance-tests/2023-09/ENV_PARAMS/jobs/4.5--value-reaches-on-exit-args.test.yaml.
 # RFC 0010 / Template Schemas §4.5, How Jobs Are Run §Environment Parameters:
 # onExit sees the same Env.Param value the Session entered the Environment with.
 template:
