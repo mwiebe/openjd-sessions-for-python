@@ -243,6 +243,8 @@ class TestEnterEnvironmentWithParameters:
             assert session.environments_entered == ()
         # The Session may end before the poll thread (50 ms period) reads the
         # terminal status; the refused action's FAILED must survive that.
+        # This test rarely hits that window; test_refused_then_cleanup_reports_failed
+        # and test_refused_status_survives_cleanup_and_cancel pin it.
         deadline = time.monotonic() + 5
         while (not statuses or statuses[-1].state != ActionState.FAILED) and (
             time.monotonic() < deadline
