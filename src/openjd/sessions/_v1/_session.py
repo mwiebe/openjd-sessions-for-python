@@ -399,8 +399,9 @@ class Session:
             If an action is currently in-flight. Call between actions only.
         SessionRuntimeError
             If an added rule is invalid (a ``source_path`` that is not
-            absolute for its format, or a ``source_path`` or
-            ``destination_path`` longer than 32 KiB). The session's rules
+            absolute for its format, a ``source_path`` or
+            ``destination_path`` longer than 32 KiB, or rules that together
+            pass the path mapper's 30 MiB size limit). The session's rules
             are left unchanged. The message counts the existing rules first:
             the first added rule is ``path mapping rule <len(existing)>``.
         """
