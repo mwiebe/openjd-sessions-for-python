@@ -434,13 +434,18 @@ class TestEnterEnvironmentWithParameters:
 @pytest.mark.skipif(os.name == "nt", reason="POSIX commands and paths")
 class TestRefusedActions:
     @staticmethod
-    def _collect(session_root: Path) -> tuple[Session, list[Any]]:
+    def _collect(session_root: Path, long_path: bool = True) -> tuple[Session, list[Any]]:
+        # ``long_path``: a PATH Job Parameter over 32 KiB, which no action
+        # that builds the Job's symbols can map.
         statuses: list[Any] = []
+        values = (
+            {"P": JobParameterValue(type=JobParameterType.PATH, value="/" + "a" * 40000)}
+            if long_path
+            else {}
+        )
         session = Session(
             session_id="s",
-            job_parameter_values={
-                "P": JobParameterValue(type=JobParameterType.PATH, value="/" + "a" * 40000)
-            },
+            job_parameter_values=values,
             session_root_directory=session_root,
             callback=lambda _sid, st: statuses.append(st),
         )
@@ -498,6 +503,47 @@ class TestRefusedActions:
             terminal = self._terminal(statuses)
             assert [st.state for st in statuses] == [ActionState.RUNNING, ActionState.FAILED]
             assert terminal.fail_message == status.fail_message
+
+    def test_run_subprocess_in_ready_ending(self, tmp_path: Path) -> None:
+        # A failed onExit leaves the Session READY_ENDING, where
+        # run_subprocess is refused before it starts.
+        jt = decode_job_template(
+            template={
+                "specificationVersion": "jobtemplate-2023-09",
+                "name": "J",
+                "jobEnvironments": [
+                    {"name": "E", "script": {"actions": {"onExit": {"command": "false"}}}}
+                ],
+                "steps": [{"name": "S", "script": {"actions": {"onRun": {"command": "true"}}}}],
+            }
+        )
+        env = create_job(job_template=jt, job_parameter_values={}).job_environments[0]
+        session, statuses = self._collect(tmp_path, long_path=False)
+        with session:
+            eid = session.enter_environment(environment=env, resolved_symtab=env.resolved_symtab)
+            _wait(session)
+            session.exit_environment(identifier=eid, resolved_symtab=env.resolved_symtab)
+            _wait(session)
+            # The onExit ran and failed: the session's own status, with its
+            # exit code.
+            status = session.action_status
+            assert status is not None
+            assert (status.state, status.exit_code, status.fail_message) == (
+                ActionState.FAILED,
+                1,
+                None,
+            )
+            assert session.state == SessionState.READY_ENDING
+            assert self._terminal(statuses).state == ActionState.FAILED
+            del statuses[:]
+            session.run_subprocess(command="true")
+            _wait(session)
+            status = session.action_status
+            assert status is not None
+            assert status.state == ActionState.FAILED
+            assert status.fail_message == "Session must be in READY state, current: READY_ENDING"
+            assert self._terminal(statuses).fail_message == status.fail_message
+            assert [st.state for st in statuses] == [ActionState.RUNNING, ActionState.FAILED]
 
     def test_exit_of_an_unknown_environment(self, tmp_path: Path) -> None:
         session, statuses = self._collect(tmp_path)
@@ -683,18 +729,26 @@ class TestInvalidPathMappingRules:
                 )
             # The index counts the existing rule first.
             assert str(exc.value) == self._MESSAGE.replace("rule 1:", "rule 2:")
+
+            def enter_and_exit() -> None:
+                eid = session.enter_environment(
+                    environment=env,
+                    resolved_symtab=env.resolved_symtab,
+                    parameters=step.environment_parameters_for("Tool"),
+                )
+                _wait(session)
+                assert session.action_status is not None
+                assert session.action_status.state == ActionState.SUCCESS
+                session.exit_environment(identifier=eid, resolved_symtab=env.resolved_symtab)
+                _wait(session)
+
+            # The rejected extension added nothing: /first still applies.
+            enter_and_exit()
             session.extend_path_mapping_rules([rule("/added"), rule("/last")])
-            session.enter_environment(
-                environment=env,
-                resolved_symtab=env.resolved_symtab,
-                parameters=step.environment_parameters_for("Tool"),
-            )
-            _wait(session)
-            assert session.action_status is not None
-            assert session.action_status.state == ActionState.SUCCESS
-        lines = [r.getMessage() for r in caplog.records]
-        # The last rule given for /src wins.
-        assert "ENTER red /last/data" in lines
+            enter_and_exit()
+        enters = [r.getMessage() for r in caplog.records if r.getMessage().startswith("ENTER ")]
+        # Then the last rule given for /src wins.
+        assert enters == ["ENTER red /first/data", "ENTER red /last/data"]
 
     def test_extend_rejects_an_invalid_rule(self, tmp_path: Path) -> None:
         from openjd.sessions._v1 import PathMappingRule
