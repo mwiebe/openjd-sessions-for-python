@@ -1,5 +1,5 @@
 # Copied unchanged (below this header) from openjd-specifications branch
-# rfc-env-params @ 80a2018, conformance-tests/2023-09/ENV_PARAMS/jobs/4.5--path-value-mapped-in-env-param-posix.test.yaml.
+# rfc-env-params @ 87be017, conformance-tests/2023-09/ENV_PARAMS/jobs/4.5--path-value-mapped-in-env-param-posix.test.yaml.
 # RFC 0010 / Template Schemas §4.5 (Env.Param.<name> for PATH has path mapping
 # rules applied): a PATH value supplied from "{{RawParam.Dir}}" is path-mapped
 # when read as Env.Param.Dir.
