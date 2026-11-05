@@ -26,6 +26,7 @@ import yaml  # type: ignore[import-untyped]
 from openjd.expr import SerializedSymbolTable
 from openjd.model._v1 import create_job, decode_job_template
 from openjd.model._v1.errors import ModelValidationError
+from openjd.model._v1.types import JobParameterType, JobParameterValue
 from openjd.sessions._v1 import (
     ActionState,
     EnvironmentParameterValues,
@@ -283,7 +284,10 @@ class TestEnterEnvironmentWithParameters:
             "parameter name; each entry must be keyed by the bare name."
         )
 
-    def test_a_later_action_replaces_the_refused_status(self, job: Any, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("first", [True, False], ids=["first-action", "after-success"])
+    def test_a_later_action_replaces_the_refused_status(
+        self, job: Any, tmp_path: Path, first: bool
+    ) -> None:
         env = job.job_environments[0]
         dotted = EnvironmentParameterValues(
             environment="Tool",
@@ -294,6 +298,9 @@ class TestEnterEnvironmentWithParameters:
         with Session(
             session_id="s", job_parameter_values={}, session_root_directory=tmp_path
         ) as session:
+            if not first:
+                session.run_subprocess(command="true")
+                _wait(session)
             session.enter_environment(environment=env, parameters=dotted)
             _wait(session)
             assert session.action_status is not None
@@ -341,6 +348,27 @@ class TestEnterEnvironmentWithParameters:
             while len(statuses) < 2 and time.monotonic() < deadline:
                 time.sleep(0.01)
             assert [st.state for st in statuses] == [ActionState.RUNNING, ActionState.FAILED]
+
+    def test_an_enter_that_ran_keeps_its_own_status(self, tmp_path: Path) -> None:
+        # Only an action refused before it started gets the binding's FAILED;
+        # an onEnter that ran and failed keeps the session's status.
+        template = dict(_TEMPLATE)
+        template["jobEnvironments"] = [
+            {"name": "Bad", "script": {"actions": {"onEnter": {"command": "false"}}}}
+        ]
+        template["steps"] = [{"name": "S", "script": {"actions": {"onRun": {"command": "true"}}}}]
+        jt = decode_job_template(template=template, supported_extensions=["ENV_PARAMS", "EXPR"])
+        env = create_job(job_template=jt, job_parameter_values={}).job_environments[0]
+        with Session(
+            session_id="s", job_parameter_values={}, session_root_directory=tmp_path
+        ) as session:
+            session.enter_environment(environment=env, resolved_symtab=env.resolved_symtab)
+            _wait(session)
+            status = session.action_status
+            assert status is not None
+            assert status.state == ActionState.FAILED
+            assert status.exit_code == 1
+            assert status.fail_message is None
 
     def test_unbindable_table_as_first_action(self, job: Any, tmp_path: Path) -> None:
         # No earlier action: the status must still become FAILED, not stay None.
@@ -398,6 +426,105 @@ class TestEnterEnvironmentWithParameters:
             assert status is not None
             assert status.state == ActionState.FAILED
             assert session.environment_parameters(eid) is None
+
+
+# ── Other actions refused before they start ──
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX commands and paths")
+class TestRefusedActions:
+    @staticmethod
+    def _collect(session_root: Path) -> tuple[Session, list[Any]]:
+        statuses: list[Any] = []
+        session = Session(
+            session_id="s",
+            job_parameter_values={
+                "P": JobParameterValue(type=JobParameterType.PATH, value="/" + "a" * 40000)
+            },
+            session_root_directory=session_root,
+            callback=lambda _sid, st: statuses.append(st),
+        )
+        return session, statuses
+
+    @staticmethod
+    def _terminal(statuses: list[Any]) -> Any:
+        deadline = time.monotonic() + 5
+        while (not statuses or statuses[-1].state == ActionState.RUNNING) and (
+            time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        return statuses[-1]
+
+    @pytest.mark.parametrize("first", [True, False], ids=["first-action", "after-success"])
+    def test_run_task_that_cannot_build_its_symbols(self, tmp_path: Path, first: bool) -> None:
+        # openjd-sessions 0.8.2: a PATH value longer than 32 KiB cannot be
+        # mapped, so the task is refused before it runs.
+        jt = decode_job_template(
+            template={
+                "specificationVersion": "jobtemplate-2023-09",
+                "name": "J",
+                "parameterDefinitions": [{"name": "P", "type": "PATH"}],
+                "steps": [
+                    {
+                        "name": "S",
+                        "script": {
+                            "actions": {"onRun": {"command": "echo", "args": ["{{Param.P}}"]}}
+                        },
+                    }
+                ],
+            }
+        )
+        job = create_job(job_template=jt, job_parameter_values={"P": "/" + "a" * 40000})
+        session, statuses = self._collect(tmp_path)
+        with session:
+            if not first:
+                session.run_subprocess(command="true")
+                _wait(session)
+                assert self._terminal(statuses).state == ActionState.SUCCESS
+                del statuses[:]
+            session.run_task(
+                step_script=job.steps[0].script,
+                task_parameter_values={},
+                resolved_symtab=job.steps[0].resolved_symtab,
+            )
+            _wait(session)
+            status = session.action_status
+            assert status is not None
+            assert status.state == ActionState.FAILED
+            assert status.fail_message == (
+                "Failed to apply path mapping to Param.P: the path is 40001 bytes long, more than "
+                "the limit of 32768 bytes"
+            )
+            terminal = self._terminal(statuses)
+            assert [st.state for st in statuses] == [ActionState.RUNNING, ActionState.FAILED]
+            assert terminal.fail_message == status.fail_message
+
+    def test_exit_of_an_unknown_environment(self, tmp_path: Path) -> None:
+        session, statuses = self._collect(tmp_path)
+        with session:
+            session.run_subprocess(command="true")
+            _wait(session)
+            assert self._terminal(statuses).state == ActionState.SUCCESS
+            del statuses[:]
+            session.exit_environment(identifier="nope")
+            _wait(session)
+            status = session.action_status
+            assert status is not None
+            assert status.state == ActionState.FAILED
+            assert status.fail_message == "Unknown environment identifier: nope"
+            assert [st.state for st in statuses] == [ActionState.RUNNING, ActionState.FAILED]
+
+
+# ── Dropping a Session cleans it up ──
+
+
+def test_dropping_a_session_removes_its_working_directory(tmp_path: Path) -> None:
+    session = Session(session_id="s", job_parameter_values={}, session_root_directory=tmp_path)
+    working = session.working_directory
+    assert working.is_dir()
+    del session
+    gc.collect()
+    assert not working.exists()
 
 
 # ── exclusiveGroup: a superseded Environment is never entered or exited ──
@@ -550,10 +677,12 @@ class TestInvalidPathMappingRules:
             session_root_directory=tmp_path,
         ) as session:
             # A rejected extension leaves the rules unchanged.
-            with pytest.raises(SessionRuntimeError):
+            with pytest.raises(SessionRuntimeError) as exc:
                 session.extend_path_mapping_rules(
                     [rule("/never"), PathMappingRule.from_dict(self._BAD)]
                 )
+            # The index counts the existing rule first.
+            assert str(exc.value) == self._MESSAGE.replace("rule 1:", "rule 2:")
             session.extend_path_mapping_rules([rule("/added"), rule("/last")])
             session.enter_environment(
                 environment=env,
