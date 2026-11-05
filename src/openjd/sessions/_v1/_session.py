@@ -382,9 +382,10 @@ class Session:
     def extend_path_mapping_rules(self, additional: list[PathMappingRule]) -> None:
         """Append additional path mapping rules to this session's rule set.
 
-        Forwards to the Rust Session.extend_path_mapping_rules, which re-sorts
-        rules by source-path length (longest first) so the most specific rule
-        matches first during FormatString resolution.
+        Forwards to the Rust Session.extend_path_mapping_rules. The rules
+        keep their order: the rule with the longest matching ``source_path``
+        applies, and between rules for the same location the one given last
+        wins, so an added rule takes precedence over an existing one.
 
         Consumers like the Deadline Cloud worker agent call this between
         actions — after an assigned action delivers per-storage-profile or
@@ -395,6 +396,10 @@ class Session:
         ------
         RuntimeError
             If an action is currently in-flight. Call between actions only.
+        SessionRuntimeError
+            If an added rule is invalid (a ``source_path`` that is not
+            absolute for its format, or a path longer than 32 KiB). The
+            session's rules are left unchanged.
         """
         self._rust_session.extend_path_mapping_rules(additional)
 
@@ -402,4 +407,7 @@ class Session:
         return []
 
     def __del__(self):
-        self.cleanup()
+        # The Rust constructor may have raised (for example on an invalid
+        # path mapping rule), leaving no Rust session to clean up.
+        if hasattr(self, "_rust_session"):
+            self.cleanup()

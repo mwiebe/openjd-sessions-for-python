@@ -1,5 +1,5 @@
 # Copied unchanged (below this header) from openjd-specifications branch
-# rfc-env-params @ 80a2018, conformance-tests/2023-09/ENV_PARAMS/jobs/7.3.1--wrap-hook-reads-wrapper-env-param.test.yaml.
+# rfc-env-params @ 87be017, conformance-tests/2023-09/ENV_PARAMS/jobs/7.3.1--wrap-hook-reads-wrapper-env-param.test.yaml.
 # RFC 0010 / Template Schemas §7.3.1 ("A wrapping Environment's wrap hooks
 # (RFC 0008) read the wrapping Environment's own parameters through
 # Env.Param.*"): a wrapping Environment's onWrapTaskRun prints the Image value
