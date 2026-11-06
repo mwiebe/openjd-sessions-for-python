@@ -35,7 +35,12 @@ from openjd.sessions._v1 import (
     SessionState,
 )
 
-from .env_params_conformance import check_expectations, run_conformance_job, should_run
+from .env_params_conformance import (
+    RunResult,
+    check_expectations,
+    run_conformance_job,
+    should_run,
+)
 
 _HERE = Path(__file__).parent
 _COPIES = _HERE / "support_files" / "env_params"
@@ -81,6 +86,48 @@ class TestConformanceSuite:
     )
     def test_job(self, path: Path, tmp_path: Path) -> None:
         _run_file(path, tmp_path)
+
+
+class TestCheckExpectations:
+    """The conformance harness's own assertions, so a weakened check cannot
+    let the suite pass."""
+
+    _OK = RunResult(output="ENTER Mnt Dir=/d\nTASK A")
+
+    def test_a_matching_run_passes(self) -> None:
+        check_expectations({"expected": {"output": ["ENTER Mnt Dir=/d"]}}, False, self._OK)
+
+    def test_missing_expected_output_fails(self) -> None:
+        with pytest.raises(AssertionError, match="missing expected output 'ENTER Mnt Dir=/x'"):
+            check_expectations({"expected": {"output": ["ENTER Mnt Dir=/x"]}}, False, self._OK)
+
+    def test_missing_any_of_output_fails(self) -> None:
+        with pytest.raises(AssertionError, match="missing"):
+            check_expectations(
+                {"expected": {"output": [{"anyOf": ["nope", "neither"]}]}}, False, self._OK
+            )
+
+    def test_forbidden_output_fails(self) -> None:
+        with pytest.raises(AssertionError, match="found forbidden output 'TASK A'"):
+            check_expectations({"expected": {"forbidden": ["TASK A"]}}, False, self._OK)
+
+    def test_an_invalid_test_that_succeeds_fails(self) -> None:
+        with pytest.raises(AssertionError, match="expected the run to fail"):
+            check_expectations({}, True, self._OK)
+
+    def test_an_unexpected_failure_fails(self) -> None:
+        with pytest.raises(AssertionError):
+            check_expectations({}, False, RunResult(error="ModelValidationError: x"))
+
+    def test_a_task_failure_with_the_wrong_exit_code_fails(self) -> None:
+        run = RunResult(failed_actions=["A: task"], output="Process exited with code: 3")
+        check_expectations({"expected": {"taskFailure": {"exitCode": 3}}}, False, run)
+        with pytest.raises(AssertionError, match="expected exit code 4"):
+            check_expectations({"expected": {"taskFailure": {"exitCode": 4}}}, False, run)
+
+    def test_a_task_failure_that_did_not_happen_fails(self) -> None:
+        with pytest.raises(AssertionError, match="expected a task failure"):
+            check_expectations({"expected": {"taskFailure": {}}}, False, self._OK)
 
 
 # ── Session.enter_environment(parameters=...) directly ──
