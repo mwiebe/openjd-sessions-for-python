@@ -187,6 +187,31 @@ class TestCheckExpectations:
             check_expectations({"expected": {"output": ["ENTER"]}}, False, result)
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX commands")
+    def test_each_step_runs_once_in_dependency_order(self, tmp_path: Path) -> None:
+        def step(name: str, deps: list[str]) -> dict[str, Any]:
+            result: dict[str, Any] = {
+                "name": name,
+                "script": {"actions": {"onRun": {"command": "echo", "args": [f"TASK-{name}"]}}},
+            }
+            if deps:
+                result["dependencies"] = [{"dependsOn": d} for d in deps]
+            return result
+
+        test = {
+            "template": {
+                "specificationVersion": "jobtemplate-2023-09",
+                "extensions": ["ENV_PARAMS", "EXPR"],
+                "name": "Order",
+                # Listed out of dependency order: C needs B, B needs A.
+                "steps": [step("C", ["B"]), step("B", ["A"]), step("A", [])],
+            }
+        }
+        result = run_conformance_job(test, tmp_path)
+        assert not result.failed
+        tasks = [line for line in result.output.splitlines() if line.startswith("TASK-")]
+        assert tasks == ["TASK-A", "TASK-B", "TASK-C"]
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX commands")
     def test_a_failed_enter_is_a_failed_action(self, tmp_path: Path) -> None:
         test = {
             "template": {
