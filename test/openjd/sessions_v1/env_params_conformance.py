@@ -126,9 +126,11 @@ def run_conformance_job(test: dict[str, Any], work_dir: Path) -> RunResult:
             decode_environment_template(template=e, supported_extensions=ALL_EXTENSIONS)
             for e in test.get("environments", [])
         ]
-        # The openjd CLI's submission policy (openjd-cli ``submission_context``):
-        # the template's own profile, host path format, URI PATH values allowed.
-        context = ValidationContext(job_template.profile, allow_uri_path_values=True)
+        # The template's own profile, as openjd-cli ``submission_context`` uses
+        # (the CLI also applies its caller limits; this harness does not). Since
+        # openjd-rs a8f9f233 a context has no path policy: Environment parameter
+        # PATH values are used as given.
+        context = ValidationContext(job_template.profile)
         created = create_job_with_environment_templates(
             job_template=job_template,
             job_parameter_values=dict(test.get("parameters", {})),
