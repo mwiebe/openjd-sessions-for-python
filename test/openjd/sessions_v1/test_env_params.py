@@ -433,6 +433,119 @@ class TestEnterEnvironmentWithParameters:
 # ── Other actions refused before they start ──
 
 
+# ── PATH values used as given (spec af53020, Template Schemas §4.5 item 3) ──
+
+_AS_GIVEN_TEMPLATE: dict[str, Any] = {
+    "specificationVersion": "jobtemplate-2023-09",
+    "extensions": ["ENV_PARAMS", "EXPR"],
+    "name": "AsGiven",
+    "parameterDefinitions": [{"name": "Dir", "type": "PATH", "default": "/unused"}],
+    "jobEnvironments": [
+        {
+            "name": "Mnt",
+            "activation": "ON_REQUEST",
+            "envParameterDefinitions": [
+                {"name": "Dir", "type": "PATH"},
+                {"name": "Mounts", "type": "LIST[PATH]"},
+            ],
+            "script": {
+                "actions": {
+                    "onEnter": {
+                        "command": "echo",
+                        "args": [
+                            "ENTER",
+                            "{{Env.Param.Dir}}",
+                            "{{Env.RawParam.Dir}}",
+                            "{{Env.Param.Mounts}}",
+                            "{{Env.RawParam.Mounts}}",
+                        ],
+                    }
+                }
+            },
+        }
+    ],
+    "steps": [
+        {
+            "name": "S",
+            "dependencies": [
+                {
+                    "environment": "Mnt",
+                    "parameters": {
+                        "Dir": "{{RawParam.Dir}}",
+                        "Mounts": ["C:\\proj\\a", "rel/b", "/src/c"],
+                    },
+                }
+            ],
+            "script": {"actions": {"onRun": {"command": "echo", "args": ["TASK"]}}},
+        }
+    ],
+}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX echo and paths")
+class TestPathValuesAsGiven:
+    """A relative or Windows value travels through create_job and is mapped by
+    the Session only when a rule matches; Env.RawParam keeps the text."""
+
+    @pytest.mark.parametrize(
+        "value, mapped",
+        [
+            ("C:\\proj\\sub", "/mnt/proj/sub"),
+            ("\\\\srv\\share\\x", "/mnt/share/x"),
+            ("/src/d", "/dst/d"),
+            ("rel/dir", "rel/dir"),
+            ("C:dir", "C:dir"),
+            ("\\dir", "\\dir"),
+        ],
+    )
+    def test_value_is_mapped_only_when_a_rule_matches(
+        self, value: str, mapped: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.INFO)
+        from openjd.sessions._v1 import PathMappingRule
+
+        jt = decode_job_template(
+            template=_AS_GIVEN_TEMPLATE, supported_extensions=["ENV_PARAMS", "EXPR"]
+        )
+        job = create_job(job_template=jt, job_parameter_values={"Dir": value})
+        step = job.steps[0]
+        env = job.job_environments[0]
+        values = step.environment_parameters_for("Mnt")
+        assert values is not None
+        stored = {v["name"]: v["value"] for v in json.loads(values.to_json_str())["values"]}
+        assert stored == {"Dir": value, "Mounts": ["C:\\proj\\a", "rel/b", "/src/c"]}
+        rules = [
+            PathMappingRule.from_dict(r)
+            for r in (
+                {
+                    "source_path_format": "WINDOWS",
+                    "source_path": "C:\\proj",
+                    "destination_path": "/mnt/proj",
+                },
+                {
+                    "source_path_format": "WINDOWS",
+                    "source_path": "\\\\srv\\share",
+                    "destination_path": "/mnt/share",
+                },
+                {"source_path_format": "POSIX", "source_path": "/src", "destination_path": "/dst"},
+            )
+        ]
+        with Session(
+            session_id="s",
+            job_parameter_values={},
+            path_mapping_rules=rules,
+            session_root_directory=tmp_path,
+        ) as session:
+            session.enter_environment(
+                environment=env, resolved_symtab=env.resolved_symtab, parameters=values
+            )
+            _wait(session)
+            assert session.action_status is not None
+            assert session.action_status.state == ActionState.SUCCESS
+        expected = f"ENTER {mapped} {value} /mnt/proj/a rel/b /dst/c C:\\proj\\a rel/b /src/c"
+        assert expected in caplog.messages
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX commands and paths")
 class TestRefusedActions:
     @staticmethod
