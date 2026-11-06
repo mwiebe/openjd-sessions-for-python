@@ -88,9 +88,13 @@ class TestConformanceSuite:
         _run_file(path, tmp_path)
 
 
+_ECHO_TASK: dict[str, Any] = {"actions": {"onRun": {"command": "echo", "args": ["TASK"]}}}
+
+
 class TestCheckExpectations:
-    """The conformance harness's own assertions, so a weakened check cannot
-    let the suite pass."""
+    """The conformance harness's own checks, each branch of
+    ``check_expectations``, so a weakened check fails here even where no
+    conformance file uses the branch."""
 
     _OK = RunResult(output="ENTER Mnt Dir=/d\nTASK A")
 
@@ -102,10 +106,22 @@ class TestCheckExpectations:
             check_expectations({"expected": {"output": ["ENTER Mnt Dir=/x"]}}, False, self._OK)
 
     def test_missing_any_of_output_fails(self) -> None:
-        with pytest.raises(AssertionError, match="missing"):
+        with pytest.raises(AssertionError, match="missing {'anyOf'"):
             check_expectations(
                 {"expected": {"output": [{"anyOf": ["nope", "neither"]}]}}, False, self._OK
             )
+
+    def test_any_of_output_needs_only_one_alternative(self) -> None:
+        check_expectations(
+            {"expected": {"output": [{"anyOf": ["nope", "TASK A"]}]}}, False, self._OK
+        )
+
+    @pytest.mark.skipif(os.name == "nt", reason="the _posix keys")
+    def test_per_os_output_and_forbidden(self) -> None:
+        with pytest.raises(AssertionError, match="missing expected output 'other'"):
+            check_expectations({"expected": {"output_posix": ["other"]}}, False, self._OK)
+        with pytest.raises(AssertionError, match="found forbidden output 'TASK A'"):
+            check_expectations({"expected": {"forbidden_posix": ["TASK A"]}}, False, self._OK)
 
     def test_forbidden_output_fails(self) -> None:
         with pytest.raises(AssertionError, match="found forbidden output 'TASK A'"):
@@ -120,10 +136,72 @@ class TestCheckExpectations:
             check_expectations({}, False, RunResult(error="ModelValidationError: x"))
 
     def test_a_task_failure_with_the_wrong_exit_code_fails(self) -> None:
-        run = RunResult(failed_actions=["A: task"], output="Process exited with code: 3")
+        # The first non-zero exit code is the one checked.
+        run = RunResult(
+            failed_actions=["A: task"],
+            output="Process exited with code: 0\nProcess exited with code: 3\n"
+            "Process exited with code: 4",
+        )
         check_expectations({"expected": {"taskFailure": {"exitCode": 3}}}, False, run)
         with pytest.raises(AssertionError, match="expected exit code 4"):
             check_expectations({"expected": {"taskFailure": {"exitCode": 4}}}, False, run)
+
+    def test_a_task_failure_test_does_not_accept_a_creation_error(self) -> None:
+        with pytest.raises(AssertionError):
+            check_expectations(
+                {"expected": {"taskFailure": {}}},
+                False,
+                RunResult(error="ModelValidationError: x", failed_actions=["A: task"]),
+            )
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX commands")
+    def test_a_failed_exit_is_a_failed_action(self, tmp_path: Path) -> None:
+        test = {
+            "template": {
+                "specificationVersion": "jobtemplate-2023-09",
+                "extensions": ["ENV_PARAMS", "EXPR"],
+                "name": "FailedExit",
+                "jobEnvironments": [
+                    {
+                        "name": "E",
+                        "script": {
+                            "actions": {
+                                "onEnter": {"command": "echo", "args": ["ENTER"]},
+                                "onExit": {"command": "false"},
+                            }
+                        },
+                    }
+                ],
+                "steps": [
+                    {"name": "S", "script": _ECHO_TASK},
+                    {"name": "T", "dependencies": [{"dependsOn": "S"}], "script": _ECHO_TASK},
+                ],
+            }
+        }
+        result = run_conformance_job(test, tmp_path)
+        assert result.error is None
+        # S's exit fails, so the run stops before T.
+        assert len(result.failed_actions) == 1
+        assert result.failed_actions[0].startswith("S: exit ")
+        with pytest.raises(AssertionError):
+            check_expectations({"expected": {"output": ["ENTER"]}}, False, result)
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX commands")
+    def test_a_failed_enter_is_a_failed_action(self, tmp_path: Path) -> None:
+        test = {
+            "template": {
+                "specificationVersion": "jobtemplate-2023-09",
+                "extensions": ["ENV_PARAMS", "EXPR"],
+                "name": "FailedEnter",
+                "jobEnvironments": [
+                    {"name": "E", "script": {"actions": {"onEnter": {"command": "false"}}}}
+                ],
+                "steps": [{"name": "S", "script": _ECHO_TASK}],
+            }
+        }
+        result = run_conformance_job(test, tmp_path)
+        assert result.failed_actions == ["S: enter E"]
+        assert "TASK" not in result.output
 
     def test_a_task_failure_that_did_not_happen_fails(self) -> None:
         with pytest.raises(AssertionError, match="expected a task failure"):
@@ -603,6 +681,35 @@ class TestPathValuesAsGiven:
         enter = f"ENTER {mapped} {value} /mnt/proj/a rel/b /dst/c C:\\proj\\a rel/b /src/c"
         assert [m for m in caplog.messages if m.startswith("ENTER")] == [enter]
         assert [m for m in caplog.messages if m.startswith("EXIT")] == [f"EXIT {mapped} {value}"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="openjd-rs a8f9f233 joins an empty path as a root ('' / 'k' is '/k'); "
+        "pathlib gives 'k'. Open issue BX-20.",
+    )
+    def test_an_empty_value_joins_as_pathlib_does(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.INFO)
+        template = json.loads(json.dumps(_AS_GIVEN_TEMPLATE))
+        template["steps"][0]["dependencies"][0]["parameters"]["Dir"] = ""
+        env_template = template["jobEnvironments"][0]
+        env_template["script"]["actions"]["onEnter"]["args"] = [
+            "JOINED",
+            "{{Env.Param.Dir / 'k'}}",
+        ]
+        jt = decode_job_template(template=template, supported_extensions=["ENV_PARAMS", "EXPR"])
+        job = create_job(job_template=jt, job_parameter_values={})
+        env = job.job_environments[0]
+        values = job.steps[0].environment_parameters_for("Mnt")
+        with Session(
+            session_id="s", job_parameter_values={}, session_root_directory=tmp_path
+        ) as session:
+            session.enter_environment(
+                environment=env, resolved_symtab=env.resolved_symtab, parameters=values
+            )
+            _wait(session)
+        assert [m for m in caplog.messages if m.startswith("JOINED")] == ["JOINED k"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX commands and paths")
