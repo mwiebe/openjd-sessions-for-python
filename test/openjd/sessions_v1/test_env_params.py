@@ -459,7 +459,11 @@ _AS_GIVEN_TEMPLATE: dict[str, Any] = {
                             "{{Env.Param.Mounts}}",
                             "{{Env.RawParam.Mounts}}",
                         ],
-                    }
+                    },
+                    "onExit": {
+                        "command": "echo",
+                        "args": ["EXIT", "{{Env.Param.Dir}}", "{{Env.RawParam.Dir}}"],
+                    },
                 }
             },
         }
@@ -496,6 +500,8 @@ class TestPathValuesAsGiven:
             ("rel/dir", "rel/dir"),
             ("C:dir", "C:dir"),
             ("\\dir", "\\dir"),
+            ("s3://bucket/key", "s3://bucket/key"),
+            ("", ""),
         ],
     )
     def test_value_is_mapped_only_when_a_rule_matches(
@@ -504,10 +510,11 @@ class TestPathValuesAsGiven:
         caplog.set_level(logging.INFO)
         from openjd.sessions._v1 import PathMappingRule
 
-        jt = decode_job_template(
-            template=_AS_GIVEN_TEMPLATE, supported_extensions=["ENV_PARAMS", "EXPR"]
-        )
-        job = create_job(job_template=jt, job_parameter_values={"Dir": value})
+        # A literal entry, since Job Parameters still refuse URIs.
+        template = json.loads(json.dumps(_AS_GIVEN_TEMPLATE))
+        template["steps"][0]["dependencies"][0]["parameters"]["Dir"] = value
+        jt = decode_job_template(template=template, supported_extensions=["ENV_PARAMS", "EXPR"])
+        job = create_job(job_template=jt, job_parameter_values={})
         step = job.steps[0]
         env = job.job_environments[0]
         values = step.environment_parameters_for("Mnt")
@@ -536,14 +543,19 @@ class TestPathValuesAsGiven:
             path_mapping_rules=rules,
             session_root_directory=tmp_path,
         ) as session:
-            session.enter_environment(
+            eid = session.enter_environment(
                 environment=env, resolved_symtab=env.resolved_symtab, parameters=values
             )
             _wait(session)
             assert session.action_status is not None
             assert session.action_status.state == ActionState.SUCCESS
-        expected = f"ENTER {mapped} {value} /mnt/proj/a rel/b /dst/c C:\\proj\\a rel/b /src/c"
-        assert expected in caplog.messages
+            session.exit_environment(identifier=eid, resolved_symtab=env.resolved_symtab)
+            _wait(session)
+            assert session.action_status is not None
+            assert session.action_status.state == ActionState.SUCCESS
+        enter = f"ENTER {mapped} {value} /mnt/proj/a rel/b /dst/c C:\\proj\\a rel/b /src/c"
+        assert [m for m in caplog.messages if m.startswith("ENTER")] == [enter]
+        assert [m for m in caplog.messages if m.startswith("EXIT")] == [f"EXIT {mapped} {value}"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX commands and paths")
