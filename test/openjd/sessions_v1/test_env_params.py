@@ -685,7 +685,7 @@ class TestPathValuesAsGiven:
     @pytest.mark.xfail(
         strict=True,
         reason="openjd-rs a8f9f233 joins an empty path as a root ('' / 'k' is '/k'); "
-        "pathlib gives 'k'. Open issue BX-20.",
+        "pathlib gives 'k'.",
     )
     def test_an_empty_value_joins_as_pathlib_does(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
