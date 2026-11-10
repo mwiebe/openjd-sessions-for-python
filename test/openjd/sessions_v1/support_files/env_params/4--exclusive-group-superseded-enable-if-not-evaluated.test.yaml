@@ -1,5 +1,5 @@
 # Copied unchanged (below this header) from openjd-specifications branch
-# rfc-env-params @ 9ac7fd2, conformance-tests/2023-09/ENV_PARAMS/jobs/4--exclusive-group-superseded-enable-if-not-evaluated.test.yaml.
+# rfc-env-params @ eaa5d1d, conformance-tests/2023-09/ENV_PARAMS/jobs/4--exclusive-group-superseded-enable-if-not-evaluated.test.yaml.
 # Template Schemas §4 item 7, §7.4.1 step 6 (RFC 0010): once an Environment of a group is entered for a Step, the
 # enableIf of the later ones is not evaluated. Docker's enableIf reads Image, which has no default and which the
 # Step does not supply, so evaluating it would be an error (§3.2.2 rule 5). Conda, attached first, is entered, so

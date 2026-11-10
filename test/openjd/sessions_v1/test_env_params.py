@@ -17,7 +17,7 @@ import logging
 import os
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
@@ -227,6 +227,59 @@ class TestCheckExpectations:
         result = run_conformance_job(test, tmp_path)
         assert result.failed_actions == ["S: enter E"]
         assert "TASK" not in result.output
+
+    @pytest.mark.parametrize("mismatch", ["job", "step"])
+    def test_statuses_that_disagree_fail_the_step(self, mismatch: str, tmp_path: Path) -> None:
+        from types import SimpleNamespace
+
+        from openjd.model._v1 import create_job_with_environment_templates, decode_job_template
+        from openjd.model._v1.job import EnvironmentStatus
+
+        from . import env_params_conformance
+
+        jt = decode_job_template(
+            template={
+                "specificationVersion": "jobtemplate-2023-09",
+                "extensions": ["ENV_PARAMS", "EXPR"],
+                "name": "Statuses",
+                "jobEnvironments": [{"name": "E", "variables": {"V": "e"}}],
+                "steps": [
+                    {
+                        "name": "S",
+                        "stepEnvironments": [{"name": "Own", "variables": {"V": "o"}}],
+                        "script": _ECHO_TASK,
+                    }
+                ],
+            },
+            supported_extensions=["ENV_PARAMS", "EXPR"],
+        )
+        created = create_job_with_environment_templates(job_template=jt, job_parameter_values={})
+        step = created.job.steps[0]
+        assert not env_params_conformance._statuses_disagree(created, step)
+        # The same items, with one of them (a Job or a Step Environment) not
+        # entered.
+        items = [
+            SimpleNamespace(
+                name=e.name,
+                document=e.document,
+                scope=e.scope,
+                status=(
+                    EnvironmentStatus.DISABLED
+                    if e.scope.name.lower() == mismatch
+                    else EnvironmentStatus.ENTERED
+                ),
+            )
+            for e in created.environment_statuses[0].environments
+        ]
+        fake = SimpleNamespace(
+            job=created.job,
+            environment_documents=created.environment_documents,
+            environment_statuses=[SimpleNamespace(environments=items)],
+        )
+        result = RunResult()
+        env_params_conformance._run_step(fake, step, [], tmp_path, result)
+        assert result.failed_actions == ["S: environment statuses disagree"]
+        assert result.output == ""
 
     def test_a_task_failure_that_did_not_happen_fails(self) -> None:
         with pytest.raises(AssertionError, match="expected a task failure"):
@@ -707,17 +760,15 @@ class TestPathValuesAsGiven:
         assert [m for m in caplog.messages if m.startswith("ENTER")] == [enter]
         assert [m for m in caplog.messages if m.startswith("EXIT")] == [f"EXIT {mapped} {value}"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="openjd-rs a8f9f233 joins an empty path as a root ('' / 'k' is '/k'); "
-        "pathlib gives 'k'.",
-    )
+    # openjd-rs #516: a join onto an empty path gives the other operand, as
+    # pathlib does. Before, '' / 'k' was '/k'.
+    @pytest.mark.parametrize("value", ["", "rel", "/abs"])
     def test_an_empty_value_joins_as_pathlib_does(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+        self, value: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         caplog.set_level(logging.INFO)
         template = json.loads(json.dumps(_AS_GIVEN_TEMPLATE))
-        template["steps"][0]["dependencies"][0]["parameters"]["Dir"] = ""
+        template["steps"][0]["dependencies"][0]["parameters"]["Dir"] = value
         env_template = template["jobEnvironments"][0]
         env_template["script"]["actions"]["onEnter"]["args"] = [
             "JOINED",
@@ -734,7 +785,9 @@ class TestPathValuesAsGiven:
                 environment=env, resolved_symtab=env.resolved_symtab, parameters=values
             )
             _wait(session)
-        assert [m for m in caplog.messages if m.startswith("JOINED")] == ["JOINED k"]
+        joined = str(PurePosixPath(value) / "k")
+        assert joined == {"": "k", "rel": "rel/k", "/abs": "/abs/k"}[value]
+        assert [m for m in caplog.messages if m.startswith("JOINED")] == [f"JOINED {joined}"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX commands and paths")
