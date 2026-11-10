@@ -1,5 +1,5 @@
 # Copied unchanged (below this header) from openjd-specifications branch
-# rfc-env-params @ 9ac7fd2, conformance-tests/2023-09/ENV_PARAMS/jobs/4.5--path-value-unmapped-in-env-raw-param-posix.test.yaml.
+# rfc-env-params @ eaa5d1d, conformance-tests/2023-09/ENV_PARAMS/jobs/4.5--path-value-unmapped-in-env-raw-param-posix.test.yaml.
 # RFC 0010 / Template Schemas §4.5 (Env.RawParam.<name> has no path mapping
 # applied): a PATH parameter whose default is "{{RawParam.Dir}}" (a PATH Job
 # Parameter) reads unmapped as Env.RawParam.Dir. The Step supplies nothing.
