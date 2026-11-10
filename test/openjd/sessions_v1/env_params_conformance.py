@@ -13,7 +13,9 @@ decoding, job creation, or any action fails.
 For ENV_PARAMS a Session enters exactly the Job Environments
 ``Step.enters_environment`` names, in ``Job.job_environments`` order, each with
 its own ``resolved_symtab`` and the Step's ``environment_parameters`` entry for
-it.
+it. Before it does, the harness checks that the ``ENTERED`` items of the Step's
+``CreatedJob.environment_statuses`` name the same Job Environments and Step
+Environments, in the same order; a disagreement fails the Step.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ from openjd.model._v1 import (
     decode_environment_template,
     decode_job_template,
 )
-from openjd.model._v1.job import StepParameterSpaceIterator
+from openjd.model._v1.job import EnvironmentScope, EnvironmentStatus, StepParameterSpaceIterator
 from openjd.model._v1.types import JobParameterValue, ModelExtension, ValidationContext
 from openjd.sessions._v1 import (
     ActionState,
@@ -160,10 +162,39 @@ def run_conformance_job(test: dict[str, Any], work_dir: Path) -> RunResult:
     return result
 
 
+def _statuses_disagree(created: Any, step: Any) -> bool:
+    """Whether the Step's ``ENTERED`` statuses differ from the Job
+    Environments ``enters_environment`` names and the Step's
+    ``step_environments``."""
+    job = created.job
+    index = [s.name for s in job.steps].index(step.name)
+    items = created.environment_statuses[index].environments
+    by_status = [
+        (e.name, e.document)
+        for e in items
+        if e.scope != EnvironmentScope.STEP and e.status == EnvironmentStatus.ENTERED
+    ]
+    by_step = [
+        (env.name, document)
+        for env, document in zip(job.job_environments or [], created.environment_documents)
+        if step.enters_environment(env.name, document)
+    ]
+    step_by_status = [
+        e.name
+        for e in items
+        if e.scope == EnvironmentScope.STEP and e.status == EnvironmentStatus.ENTERED
+    ]
+    step_by_step = [env.name for env in step.step_environments or []]
+    return by_status != by_step or step_by_status != step_by_step
+
+
 def _run_step(
     created: Any, step: Any, rules: list[PathMappingRule], work_dir: Path, result: RunResult
 ) -> None:
     job = created.job
+    if _statuses_disagree(created, step):
+        result.failed_actions.append(f"{step.name}: environment statuses disagree")
+        return
     entered: list[tuple[str, Any]] = []
     with Session(
         session_id=f"conformance-{step.name}",
