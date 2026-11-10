@@ -228,12 +228,12 @@ class TestCheckExpectations:
         assert result.failed_actions == ["S: enter E"]
         assert "TASK" not in result.output
 
-    @pytest.mark.parametrize("mismatch", ["job", "step"])
+    @pytest.mark.parametrize("mismatch", ["job", "step", "order", "document"])
     def test_statuses_that_disagree_fail_the_step(self, mismatch: str, tmp_path: Path) -> None:
         from types import SimpleNamespace
 
         from openjd.model._v1 import create_job_with_environment_templates, decode_job_template
-        from openjd.model._v1.job import EnvironmentStatus
+        from openjd.model._v1.job import Document, EnvironmentScope, EnvironmentStatus
 
         from . import env_params_conformance
 
@@ -242,7 +242,10 @@ class TestCheckExpectations:
                 "specificationVersion": "jobtemplate-2023-09",
                 "extensions": ["ENV_PARAMS", "EXPR"],
                 "name": "Statuses",
-                "jobEnvironments": [{"name": "E", "variables": {"V": "e"}}],
+                "jobEnvironments": [
+                    {"name": "E", "variables": {"V": "e"}},
+                    {"name": "F", "variables": {"V": "f"}},
+                ],
                 "steps": [
                     {
                         "name": "S",
@@ -256,21 +259,23 @@ class TestCheckExpectations:
         created = create_job_with_environment_templates(job_template=jt, job_parameter_values={})
         step = created.job.steps[0]
         assert not env_params_conformance._statuses_disagree(created, step)
-        # The same items, with one of them (a Job or a Step Environment) not
-        # entered.
         items = [
-            SimpleNamespace(
-                name=e.name,
-                document=e.document,
-                scope=e.scope,
-                status=(
-                    EnvironmentStatus.DISABLED
-                    if e.scope.name.lower() == mismatch
-                    else EnvironmentStatus.ENTERED
-                ),
-            )
+            SimpleNamespace(name=e.name, document=e.document, scope=e.scope, status=e.status)
             for e in created.environment_statuses[0].environments
         ]
+        assert [(i.name, i.scope, i.status) for i in items] == [
+            ("E", EnvironmentScope.JOB, EnvironmentStatus.ENTERED),
+            ("F", EnvironmentScope.JOB, EnvironmentStatus.ENTERED),
+            ("Own", EnvironmentScope.STEP, EnvironmentStatus.ENTERED),
+        ]
+        if mismatch == "job":
+            items[0].status = EnvironmentStatus.DISABLED
+        elif mismatch == "step":
+            items[2].status = EnvironmentStatus.DISABLED
+        elif mismatch == "order":
+            items[0], items[1] = items[1], items[0]
+        else:
+            items[1].document = Document.environment_template(0)
         fake = SimpleNamespace(
             job=created.job,
             environment_documents=created.environment_documents,
