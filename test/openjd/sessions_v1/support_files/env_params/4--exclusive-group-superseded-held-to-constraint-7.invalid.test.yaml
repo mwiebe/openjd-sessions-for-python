@@ -1,8 +1,9 @@
 # Copied unchanged (below this header) from openjd-specifications branch
-# rfc-env-params @ eaa5d1d, conformance-tests/2023-09/ENV_PARAMS/jobs/4--exclusive-group-superseded-not-held-to-constraint-7.test.yaml.
-# Template Schemas §4 item 7, §3.2.2 (RFC 0010): a superseded Environment is disabled for the Step, so constraint 7
-# does not apply to it. Docker is BY_DEFAULT and its Image has no default, which the Step does not supply; without
-# the group the Job would be rejected. Conda, attached first, is enabled, so Docker is superseded and the Job runs.
+# rfc-env-params @ 96d2d00, conformance-tests/2023-09/ENV_PARAMS/jobs/4--exclusive-group-superseded-held-to-constraint-7.invalid.test.yaml.
+# Template Schemas §4 item 7, §3.2 constraint 7, and §7.4.1 step 5 (RFC 0010): whether an Environment applies to a Step
+# does not depend on its exclusiveGroup. Docker is BY_DEFAULT and its Image has no default, which the Step does not
+# supply. Conda, attached first, would supersede Docker for the Step, but constraint 7 is checked before the group rule,
+# so the submission is rejected.
 template:
   specificationVersion: jobtemplate-2023-09
   extensions: [ENV_PARAMS, EXPR]
@@ -47,9 +48,3 @@ environments:
           command: echo
           args: [ENTER, Docker]
 runOn: [posix, windows]
-expected:
-  output:
-  - ENTER Conda
-  - TASK S
-  forbidden:
-  - ENTER Docker

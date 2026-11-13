@@ -1000,14 +1000,23 @@ _GROUP_TEMPLATE: dict[str, Any] = {
         }
         for name, extra in (
             ("A", {"enableIf": "Param.UseA"}),
-            # B's Seats has no default and no Step supplies it: B is only
-            # valid where A supersedes it.
-            ("B", {"envParameterDefinitions": [{"name": "Seats", "type": "INT"}]}),
+            # B's Seats has no default. B applies to S whether or not A
+            # supersedes it, so S supplies it (Template Schemas §3.2
+            # constraint 7); its value is checked only where B is not
+            # superseded.
+            (
+                "B",
+                {"envParameterDefinitions": [{"name": "Seats", "type": "INT", "minValue": 5}]},
+            ),
         )
     ],
     "parameterDefinitions": [{"name": "UseA", "type": "BOOL", "default": True}],
     "steps": [
-        {"name": "S", "script": {"actions": {"onRun": {"command": "echo", "args": ["TASK"]}}}}
+        {
+            "name": "S",
+            "dependencies": [{"environment": "B", "parameters": {"Seats": 1}}],
+            "script": {"actions": {"onRun": {"command": "echo", "args": ["TASK"]}}},
+        }
     ],
 }
 
@@ -1057,7 +1066,8 @@ class TestSupersededEnvironment:
         assert not any(" B" in line and line.split()[0] in ("ENTER", "EXIT") for line in lines)
 
     def test_falls_through_when_the_first_is_disabled(self) -> None:
-        # With A disabled, B is entered, and its missing Seats is an error.
+        # With A disabled, B is entered, and S's Seats, below its minimum, is
+        # now checked: an error.
         jt = decode_job_template(
             template=_GROUP_TEMPLATE, supported_extensions=["ENV_PARAMS", "EXPR"]
         )
@@ -1065,12 +1075,26 @@ class TestSupersededEnvironment:
             create_job(job_template=jt, job_parameter_values={"UseA": "false"})
         assert str(exc.value) == (
             "1 validation error for JobTemplate\n"
+            "steps[0] -> dependencies[0] -> parameters -> Seats:\n"
+            "\tParameter 'Seats': value 1 is less than minimum 5"
+        )
+
+    def test_a_superseded_environment_still_needs_its_values(self) -> None:
+        # B applies to S whatever A does, so leaving out Seats is an error at
+        # template validation (Template Schemas §3.2 constraint 7).
+        template = {**_GROUP_TEMPLATE, "steps": [{**_GROUP_TEMPLATE["steps"][0]}]}
+        del template["steps"][0]["dependencies"]
+        with pytest.raises(ModelValidationError) as exc:
+            decode_job_template(template=template, supported_extensions=["ENV_PARAMS", "EXPR"])
+        assert str(exc.value) == (
+            "1 validation error for JobTemplate\n"
             "steps[0]:\n"
             "\tmust supply, in an 'environment:' dependency, every parameter without a default "
-            "of each Environment its Sessions enter (every jobEnvironments entry with activation "
+            "of each Environment that applies to it (every jobEnvironments entry with activation "
             "ALWAYS, each one with activation BY_DEFAULT that the Step does not decline, and each "
             "one with activation ON_REQUEST that the Step requests; Template Schemas §3.2 "
-            "constraint 7); missing: 'Seats' of Environment 'B'."
+            "constraint 7), whatever that Environment's own enableIf is; missing: 'Seats' of "
+            "Environment 'B'."
         )
 
 
