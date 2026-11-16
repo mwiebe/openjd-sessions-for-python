@@ -49,7 +49,23 @@ TaskParameterSet = dict[str, Any]
 
 
 class Session:
-    """A context for running actions of an Open Job Description Job."""
+    """A context for running actions of an Open Job Description Job.
+
+    Backed by the openjd-sessions Rust crate, and follows its behavior. A
+    call the crate refuses raises ``SessionError`` (exported here as
+    ``SessionRuntimeError``, a ``RuntimeError``) with the crate's message and
+    changes nothing: ``run_task``, ``enter_environment`` and
+    ``run_subprocess`` unless the session is ``READY``, ``exit_environment``
+    unless it is ``READY`` or ``READY_ENDING``, an unknown, out-of-order or
+    duplicate environment identifier, and a call while another action runs.
+    An accepted call returns once its action is running, and its outcome,
+    errors included, is reported on ``action_status`` and to the callback.
+
+    An action that fails, is canceled or times out makes the session
+    ending-only (``READY_ENDING``), even after
+    ``exit_environment(keep_session_running=True)``. ``clear_ending_only()``
+    takes it back to ``READY``.
+    """
 
     _rust_session: _RustSession
     _callback: Optional[SessionCallbackType]
@@ -255,6 +271,14 @@ class Session:
         os_env_vars: Optional[dict[str, str]] = None,
         resolved_symtab: Optional[SerializedSymbolTable] = None,
     ) -> EnvironmentIdentifier:
+        """Enter an environment and return its identifier once its onEnter
+        action is running.
+
+        Raises ``SessionError`` if the session isn't ``READY``, if
+        ``identifier`` is already entered, or if a second environment with
+        wrap hooks is entered. A failure after that fails the action; the
+        environment still counts as entered and must be exited.
+        """
         # ``resolved_symtab`` is the step-scope symbol table generated
         # by ``create_job`` (available as ``Step.resolved_symtab``).
         # It contains ``Param.*``, ``RawParam.*``, ``Job.Name``,
@@ -281,6 +305,13 @@ class Session:
         keep_session_running: bool = True,
         resolved_symtab: Optional[SerializedSymbolTable] = None,
     ) -> None:
+        """Exit an environment. Returns once its onExit action is running.
+
+        Raises ``SessionError`` if the session isn't ``READY`` or
+        ``READY_ENDING``, if ``identifier`` isn't entered, or if it isn't the
+        most recently entered environment. A failure after that fails the
+        action, and the environment still counts as exited.
+        """
         # See ``enter_environment`` for ``resolved_symtab`` semantics.
         self._rust_session.exit_environment(
             identifier=identifier,
@@ -301,6 +332,11 @@ class Session:
         resolved_symtab: Optional[SerializedSymbolTable] = None,
         step_name: Optional[str] = None,
     ) -> None:
+        """Run a task. Returns once its onRun action is running.
+
+        Raises ``SessionError`` if the session isn't ``READY``, for example
+        because an earlier action failed and the session is ending-only.
+        """
         # ``resolved_symtab`` is the step-scope symbol table generated
         # by ``create_job`` (available as ``Step.resolved_symtab``).
         # It contains ``Param.*``, ``RawParam.*``, ``Job.Name``,
@@ -338,6 +374,11 @@ class Session:
         use_session_env_vars: bool = True,
         log_banner_message: Optional[str] = None,
     ) -> None:
+        """Run a subprocess in the session. Returns once it is running.
+
+        Raises ``SessionError`` if the session isn't ``READY``, if
+        ``command`` is blank, or if ``timeout`` is zero.
+        """
         self._rust_session.run_subprocess(
             command=command,
             args=args,
@@ -348,6 +389,14 @@ class Session:
         )
         self._fire_initial_running_callback()
         self._poll_for_completion()
+
+    def clear_ending_only(self) -> None:
+        """Take an ending-only session (``READY_ENDING``) back to ``READY``,
+        keeping the environments entered and the last action's status.
+
+        Raises ``SessionError`` if the session isn't ``READY_ENDING``.
+        """
+        self._rust_session.clear_ending_only()
 
     def cleanup(self) -> None:
         self._rust_session.cleanup()
@@ -366,9 +415,9 @@ class Session:
     def extend_path_mapping_rules(self, additional: list[PathMappingRule]) -> None:
         """Append additional path mapping rules to this session's rule set.
 
-        Forwards to the Rust Session.extend_path_mapping_rules, which re-sorts
-        rules by source-path length (longest first) so the most specific rule
-        matches first during FormatString resolution.
+        When several rules match a path, the one whose source path has the
+        most names applies, and among rules for the same location the last
+        one given applies, wherever it sits in the list.
 
         Consumers like the Deadline Cloud worker agent call this between
         actions — after an assigned action delivers per-storage-profile or
@@ -379,6 +428,9 @@ class Session:
         ------
         RuntimeError
             If an action is currently in-flight. Call between actions only.
+        SessionError
+            If an added rule is invalid, for example a POSIX or WINDOWS
+            ``source_path`` that is not absolute. The rules are unchanged.
         """
         self._rust_session.extend_path_mapping_rules(additional)
 
