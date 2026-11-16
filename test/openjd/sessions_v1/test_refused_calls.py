@@ -109,6 +109,9 @@ def test_clear_ending_only_on_a_ready_session_raises(tmp_path: Path) -> None:
         with pytest.raises(SessionRuntimeError) as exc_info:
             session.clear_ending_only()
         assert str(exc_info.value) == "Session must be in READY_ENDING state, current: READY"
+        assert session.state == SessionState.READY
+        assert session.action_status is None
+        assert session.environments_entered == ()
 
 
 @pytest.mark.parametrize(
@@ -135,6 +138,8 @@ def test_run_subprocess_timeout_is_checked(
             session.run_subprocess(command=sys.executable, args=["-c", ""], timeout=timeout)
         assert str(exc_info.value) == message
         assert session.state == SessionState.READY
+        assert session.action_status is None
+        assert session.environments_entered == ()
 
 
 def test_cancel_with_a_zero_time_limit_terminates_at_once(tmp_path: Path) -> None:
@@ -143,8 +148,14 @@ def test_cancel_with_a_zero_time_limit_terminates_at_once(tmp_path: Path) -> Non
     wrapper turned it into no time limit."""
     from datetime import timedelta
 
+    # Ignore the notify signal: SIGTERM on POSIX, CTRL_BREAK (SIGBREAK) on
+    # Windows. Only a terminate then ends the task before the grace period.
     ignore_term = (
-        "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
+        "import signal, time\n"
+        "for name in ('SIGTERM', 'SIGBREAK'):\n"
+        "    if hasattr(signal, name):\n"
+        "        signal.signal(getattr(signal, name), signal.SIG_IGN)\n"
+        "time.sleep(30)"
     )
     step = deserialize_step(
         {
