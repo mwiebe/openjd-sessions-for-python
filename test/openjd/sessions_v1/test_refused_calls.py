@@ -82,9 +82,12 @@ def test_a_refused_run_task_raises_and_clear_ending_only_recovers(tmp_path: Path
         assert status is not None and status.state == ActionState.SUCCESS
 
         seen = len(callbacks)
+        entered = session.environments_entered
         with pytest.raises(SessionRuntimeError) as exc_info:
             session.run_task(step_script=_step_script(""), task_parameter_values={})
         assert str(exc_info.value) == "Session must be in READY state, current: READY_ENDING"
+        assert session.action_status == status
+        assert session.environments_entered == entered
         # A refused call starts no polling thread, so nothing can arrive.
         time.sleep(0.2)
         assert len(callbacks) == seen
@@ -132,3 +135,45 @@ def test_run_subprocess_timeout_is_checked(
             session.run_subprocess(command=sys.executable, args=["-c", ""], timeout=timeout)
         assert str(exc_info.value) == message
         assert session.state == SessionState.READY
+
+
+def test_cancel_with_a_zero_time_limit_terminates_at_once(tmp_path: Path) -> None:
+    """``timedelta(0)`` reaches the crate, which terminates at once instead of
+    giving the action its notify-then-terminate grace period. Before, the
+    wrapper turned it into no time limit."""
+    from datetime import timedelta
+
+    ignore_term = (
+        "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
+    )
+    step = deserialize_step(
+        {
+            "name": "S",
+            "script": {
+                "actions": {
+                    "onRun": {
+                        **_python(ignore_term),
+                        "cancelation": {
+                            "mode": "NOTIFY_THEN_TERMINATE",
+                            "notifyPeriodInSeconds": 20,
+                        },
+                    }
+                }
+            },
+        }
+    ).script
+    with Session(
+        session_id=uuid.uuid4().hex, job_parameter_values={}, session_root_directory=tmp_path
+    ) as session:
+        session.run_task(step_script=step, task_parameter_values={})
+        began = time.monotonic()
+        session.cancel_action(time_limit=timedelta(0))
+        deadline = began + 30
+        while (
+            session.state in (SessionState.RUNNING, SessionState.CANCELING)
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+        assert time.monotonic() - began < 10
+        status = session.action_status
+        assert status is not None and status.state == ActionState.CANCELED
