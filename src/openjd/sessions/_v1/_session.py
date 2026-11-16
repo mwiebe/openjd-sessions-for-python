@@ -260,7 +260,13 @@ class Session:
         return tuple(self._rust_session.environments_entered)
 
     def cancel_action(self, *, time_limit=None, mark_action_failed=False) -> None:
-        seconds = time_limit.total_seconds() if time_limit else None
+        """Cancel the running action. A zero ``time_limit`` terminates at once.
+
+        Raises ``SessionError`` if no action is running.
+        """
+        # `timedelta(0)` must reach the binding: the crate reads it as
+        # "terminate now", where None means the action's own grace period.
+        seconds = None if time_limit is None else time_limit.total_seconds()
         self._rust_session.cancel_action(seconds, mark_action_failed)
 
     def enter_environment(
