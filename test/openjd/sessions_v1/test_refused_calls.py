@@ -1,4 +1,5 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 """The _v1 Session raises the openjd-sessions crate's refusal and offers
 ``clear_ending_only``, as the Rust Session does.
@@ -51,10 +52,10 @@ def _environment() -> Any:
 def _settle(session: Session, callbacks: Optional[list[ActionStatus]] = None) -> None:
     """Wait for the action to end and, given ``callbacks``, for the wrapper's
     polling thread to deliver its terminal callback."""
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + 10
     while session.state == SessionState.RUNNING and time.monotonic() < deadline:
         time.sleep(0.02)
-    assert session.state != SessionState.RUNNING, "action did not finish within 30s"
+    assert session.state != SessionState.RUNNING, "action did not finish within 10s"
     if callbacks is not None:
         while time.monotonic() < deadline and (
             not callbacks or callbacks[-1].state == ActionState.RUNNING
@@ -150,11 +151,15 @@ def test_cancel_with_a_zero_time_limit_terminates_at_once(tmp_path: Path) -> Non
 
     # Ignore the notify signal: SIGTERM on POSIX, CTRL_BREAK (SIGBREAK) on
     # Windows. Only a terminate then ends the task before the grace period.
+    # The marker says the child is running with the signals ignored; a cancel
+    # before that would end it at once whatever the time limit.
+    marker = tmp_path / "started"
     ignore_term = (
         "import signal, time\n"
         "for name in ('SIGTERM', 'SIGBREAK'):\n"
         "    if hasattr(signal, name):\n"
         "        signal.signal(getattr(signal, name), signal.SIG_IGN)\n"
+        f"open({str(marker)!r}, 'w').close()\n"
         "time.sleep(30)"
     )
     step = deserialize_step(
@@ -177,14 +182,19 @@ def test_cancel_with_a_zero_time_limit_terminates_at_once(tmp_path: Path) -> Non
         session_id=uuid.uuid4().hex, job_parameter_values={}, session_root_directory=tmp_path
     ) as session:
         session.run_task(step_script=step, task_parameter_values={})
+        wait_until = time.monotonic() + 10
+        while not marker.exists() and time.monotonic() < wait_until:
+            time.sleep(0.02)
+        assert marker.exists()
         began = time.monotonic()
         session.cancel_action(time_limit=timedelta(0))
-        deadline = began + 30
+        deadline = began + 10
         while (
             session.state in (SessionState.RUNNING, SessionState.CANCELING)
             and time.monotonic() < deadline
         ):
             time.sleep(0.02)
-        assert time.monotonic() - began < 10
+        # Without the time limit the notify period would run first.
+        assert time.monotonic() - began < 3
         status = session.action_status
         assert status is not None and status.state == ActionState.CANCELED

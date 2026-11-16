@@ -52,8 +52,8 @@ class Session:
     """A context for running actions of an Open Job Description Job.
 
     Backed by the openjd-sessions Rust crate, and follows its behavior. A
-    call the crate refuses raises ``SessionError`` (exported here as
-    ``SessionRuntimeError``, a ``RuntimeError``) with the crate's message and
+    call the crate refuses raises ``SessionRuntimeError`` (the binding's
+    ``SessionError``, a ``RuntimeError``) with the crate's message and
     changes nothing: ``run_task``, ``enter_environment`` and
     ``run_subprocess`` unless the session is ``READY``, ``exit_environment``
     unless it is ``READY`` or ``READY_ENDING``, an unknown, out-of-order or
@@ -262,7 +262,7 @@ class Session:
     def cancel_action(self, *, time_limit=None, mark_action_failed=False) -> None:
         """Cancel the running action. A zero ``time_limit`` terminates at once.
 
-        Raises ``SessionError`` if no action is running.
+        Raises ``SessionRuntimeError`` if no action is running.
         """
         # `timedelta(0)` must reach the binding: the crate reads it as
         # "terminate now", where None means the action's own grace period.
@@ -280,7 +280,7 @@ class Session:
         """Enter an environment and return its identifier once its onEnter
         action is running.
 
-        Raises ``SessionError`` if the session isn't ``READY``, if
+        Raises ``SessionRuntimeError`` if the session isn't ``READY``, if
         ``identifier`` is already entered, or if a second environment with
         wrap hooks is entered. A failure after that fails the action; the
         environment still counts as entered and must be exited.
@@ -313,7 +313,7 @@ class Session:
     ) -> None:
         """Exit an environment. Returns once its onExit action is running.
 
-        Raises ``SessionError`` if the session isn't ``READY`` or
+        Raises ``SessionRuntimeError`` if the session isn't ``READY`` or
         ``READY_ENDING``, if ``identifier`` isn't entered, or if it isn't the
         most recently entered environment. A failure after that fails the
         action, and the environment still counts as exited.
@@ -340,7 +340,7 @@ class Session:
     ) -> None:
         """Run a task. Returns once its onRun action is running.
 
-        Raises ``SessionError`` if the session isn't ``READY``, for example
+        Raises ``SessionRuntimeError`` if the session isn't ``READY``, for example
         because an earlier action failed and the session is ending-only.
         """
         # ``resolved_symtab`` is the step-scope symbol table generated
@@ -382,7 +382,7 @@ class Session:
     ) -> None:
         """Run a subprocess in the session. Returns once it is running.
 
-        Raises ``SessionError`` if the session isn't ``READY``, if
+        Raises ``SessionRuntimeError`` if the session isn't ``READY``, if
         ``command`` is blank, or if ``timeout`` is zero, and ``ValueError``
         if ``timeout`` is negative.
         """
@@ -402,7 +402,7 @@ class Session:
         """Take an ending-only session (``READY_ENDING``) back to ``READY``,
         keeping the environments entered and the last action's status.
 
-        Raises ``SessionError`` if the session isn't ``READY_ENDING``.
+        Raises ``SessionRuntimeError`` if the session isn't ``READY_ENDING``.
         """
         self._rust_session.clear_ending_only()
 
@@ -436,7 +436,7 @@ class Session:
         ------
         RuntimeError
             If an action is currently in-flight. Call between actions only.
-        SessionError
+        SessionRuntimeError
             If an added rule is invalid, for example a POSIX or WINDOWS
             ``source_path`` that is not absolute. The rules are unchanged.
         """
