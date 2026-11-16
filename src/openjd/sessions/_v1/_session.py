@@ -272,7 +272,7 @@ class Session:
         one's grace period. Also raises it, with "Cannot cancel: the action
         has not started yet", if the action hasn't installed its cancel token
         within 20 s, or at once when called from the action's own thread (a
-        logging handler).
+        logging handler). Raises ``ValueError`` if ``time_limit`` is negative.
         """
         # `timedelta(0)` must reach the binding: the crate reads it as
         # "terminate now", where None means the action's own grace period.
