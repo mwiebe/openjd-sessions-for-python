@@ -142,11 +142,11 @@ class Session:
             return
 
         status = self._rust_session.action_status
-        # Synthesize a RUNNING ActionStatus. The Rust session may not have
-        # populated action_status yet (it deliberately clears it on the
-        # transition to Running and only sets it once the Rust callback
-        # fires, which is the same race we're fixing). Default the directive
-        # fields to None / 0.0 in that case.
+        # Synthesize a RUNNING ActionStatus. The binding returns once the
+        # action is running, so action_status normally describes it; it is
+        # already terminal when the action ended before the call returned
+        # (an environment with no script). Default the directive fields to
+        # None / 0.0 if it is missing.
         running_status = ActionStatus(
             state=ActionState.RUNNING,
             exit_code=None,
@@ -377,12 +377,14 @@ class Session:
         """Run a subprocess in the session. Returns once it is running.
 
         Raises ``SessionError`` if the session isn't ``READY``, if
-        ``command`` is blank, or if ``timeout`` is zero.
+        ``command`` is blank, or if ``timeout`` is zero, and ``ValueError``
+        if ``timeout`` is negative.
         """
         self._rust_session.run_subprocess(
             command=command,
             args=args,
-            timeout=float(timeout) if timeout else None,
+            # `timeout=0` must reach the crate, which refuses it.
+            timeout=None if timeout is None else float(timeout),
             os_env_vars=os_env_vars,
             use_session_env_vars=use_session_env_vars,
             log_banner_message=log_banner_message,
