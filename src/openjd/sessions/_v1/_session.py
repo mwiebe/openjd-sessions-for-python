@@ -65,6 +65,10 @@ class Session:
     ending-only (``READY_ENDING``), even after
     ``exit_environment(keep_session_running=True)``. ``clear_ending_only()``
     takes it back to ``READY``.
+
+    The actions run on a background thread that logs through ``logging``,
+    and each action method and ``cancel_action`` waits for it, so don't call
+    them while holding a lock that a logging handler takes.
     """
 
     _rust_session: _RustSession
@@ -262,7 +266,13 @@ class Session:
     def cancel_action(self, *, time_limit=None, mark_action_failed=False) -> None:
         """Cancel the running action. A zero ``time_limit`` terminates at once.
 
-        Raises ``SessionRuntimeError`` if no action is running.
+        Raises ``SessionRuntimeError`` if no action is running, or if a cancel
+        is already in progress (the state is ``CANCELING``): unlike
+        ``openjd.sessions.Session``, a second cancel can't shorten the first
+        one's grace period. Also raises it, with "Cannot cancel: the action
+        has not started yet", if the action hasn't installed its cancel token
+        within 20 s, or at once when called from the action's own thread (a
+        logging handler).
         """
         # `timedelta(0)` must reach the binding: the crate reads it as
         # "terminate now", where None means the action's own grace period.
