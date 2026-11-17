@@ -154,7 +154,7 @@ def run_conformance_job(test: dict[str, Any], work_dir: Path) -> RunResult:
         for step in _step_order(job):
             if result.failed_actions:
                 break
-            _run_step(created, step, rules, work_dir, result)
+            _run_step(created, step, rules, work_dir, result, job_template.profile)
     finally:
         logger.removeHandler(collector)
         logger.setLevel(old_level)
@@ -189,7 +189,12 @@ def _statuses_disagree(created: Any, step: Any) -> bool:
 
 
 def _run_step(
-    created: Any, step: Any, rules: list[PathMappingRule], work_dir: Path, result: RunResult
+    created: Any,
+    step: Any,
+    rules: list[PathMappingRule],
+    work_dir: Path,
+    result: RunResult,
+    profile: Any = None,
 ) -> None:
     job = created.job
     if _statuses_disagree(created, step):
@@ -204,6 +209,9 @@ def _run_step(
         },
         path_mapping_rules=rules or None,
         session_root_directory=work_dir,
+        # The template's profile, as `openjd run` gives its Session, so that
+        # extensions such as REDACTED_ENV_VARS take effect.
+        profile=profile,
     ) as session:
         ok = True
         for env, document in zip(job.job_environments or [], created.environment_documents):
